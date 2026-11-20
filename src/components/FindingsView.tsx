@@ -1,8 +1,16 @@
 import React, { useEffect, useState } from 'react';
-import { Search, X, ExternalLink } from 'lucide-react';
+import { Search, X, ExternalLink, ShieldAlert, ChevronRight } from 'lucide-react';
 import { apiRequest } from '../api/client';
 import type { Asset, UserRole, Vulnerability } from '../types/sentinel';
-import { formatDateTime, getSeverityStyle, getVerificationStatusLabel } from '../utils/formatters';
+import { formatDateTime, getVerificationStatusLabel } from '../utils/formatters';
+import {
+  CodeBlock,
+  EmptyState,
+  SeverityBadge,
+  VerificationStatusBadge,
+  inputClassName,
+  selectClassName,
+} from './ui';
 
 interface FindingsViewProps {
   assets: Asset[];
@@ -103,15 +111,54 @@ export const FindingsView: React.FC<FindingsViewProps> = ({
     }
   };
 
+  const resetFilters = () => {
+    setSeverity('');
+    setStatus('');
+    setAssetId('');
+    setSearch('');
+  };
+
   const totalPages = Math.max(1, Math.ceil(findings.length / pageSize));
   const paged = findings.slice((page - 1) * pageSize, page * pageSize);
 
+  const severityCounts = {
+    critical: findings.filter((f) => f.severity === 'critical').length,
+    high: findings.filter((f) => f.severity === 'high').length,
+    medium: findings.filter((f) => f.severity === 'medium').length,
+    low: findings.filter((f) => f.severity === 'low').length,
+    informational: findings.filter((f) => f.severity === 'informational').length,
+  };
+
   return (
     <div className="space-y-5">
+      {/* Severity Summary Strip */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+        <div className="bg-[#FFFFFF] border border-[#E2E8F0] rounded-lg px-4 py-3">
+          <div className="text-[11px] font-medium text-[#B91C1C]">Critical</div>
+          <div className="mt-1 text-lg font-semibold font-mono tabular-nums text-[#DC2626]">{severityCounts.critical}</div>
+        </div>
+        <div className="bg-[#FFFFFF] border border-[#E2E8F0] rounded-lg px-4 py-3">
+          <div className="text-[11px] font-medium text-[#C2410C]">High</div>
+          <div className="mt-1 text-lg font-semibold font-mono tabular-nums text-[#EA580C]">{severityCounts.high}</div>
+        </div>
+        <div className="bg-[#FFFFFF] border border-[#E2E8F0] rounded-lg px-4 py-3">
+          <div className="text-[11px] font-medium text-[#B45309]">Medium</div>
+          <div className="mt-1 text-lg font-semibold font-mono tabular-nums text-[#D97706]">{severityCounts.medium}</div>
+        </div>
+        <div className="bg-[#FFFFFF] border border-[#E2E8F0] rounded-lg px-4 py-3">
+          <div className="text-[11px] font-medium text-[#1D4ED8]">Low</div>
+          <div className="mt-1 text-lg font-semibold font-mono tabular-nums text-[#2563EB]">{severityCounts.low}</div>
+        </div>
+        <div className="bg-[#FFFFFF] border border-[#E2E8F0] rounded-lg px-4 py-3 col-span-2 sm:col-span-1">
+          <div className="text-[11px] font-medium text-[#64748B]">Informational</div>
+          <div className="mt-1 text-lg font-semibold font-mono tabular-nums text-[#475569]">{severityCounts.informational}</div>
+        </div>
+      </div>
+
       {/* Filter Bar */}
-      <div className="bg-[#0F172A] border border-slate-800 rounded-md p-4 flex flex-wrap items-center gap-3">
+      <div className="bg-[#FFFFFF] border border-[#E2E8F0] rounded-lg p-3.5 flex flex-wrap items-center gap-3">
         <div className="relative flex-1 min-w-[220px]">
-          <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" aria-hidden="true" />
+          <Search className="w-4 h-4 text-[#94A3B8] absolute left-3 top-2.5" aria-hidden="true" />
           <input
             type="search"
             value={search}
@@ -119,7 +166,7 @@ export const FindingsView: React.FC<FindingsViewProps> = ({
             onKeyDown={(e) => e.key === 'Enter' && loadFindings()}
             placeholder="Search by title, ID, URL, CWE, or CVE..."
             aria-label="Search vulnerabilities"
-            className="w-full pl-9 pr-3 py-2 text-xs bg-[#090D16] border border-slate-700 rounded text-slate-100 placeholder-slate-500"
+            className={`${inputClassName} pl-9`}
           />
         </div>
 
@@ -127,7 +174,7 @@ export const FindingsView: React.FC<FindingsViewProps> = ({
           value={severity}
           onChange={(e) => setSeverity(e.target.value)}
           aria-label="Filter by severity"
-          className="px-3 py-2 text-xs bg-[#090D16] border border-slate-700 rounded text-slate-200"
+          className={selectClassName}
         >
           <option value="">All Severities</option>
           <option value="critical">Critical</option>
@@ -141,7 +188,7 @@ export const FindingsView: React.FC<FindingsViewProps> = ({
           value={status}
           onChange={(e) => setStatus(e.target.value)}
           aria-label="Filter by status"
-          className="px-3 py-2 text-xs bg-[#090D16] border border-slate-700 rounded text-slate-200"
+          className={selectClassName}
         >
           <option value="">All Statuses</option>
           <option value="open">Open</option>
@@ -156,7 +203,7 @@ export const FindingsView: React.FC<FindingsViewProps> = ({
           value={assetId}
           onChange={(e) => setAssetId(e.target.value)}
           aria-label="Filter by asset"
-          className="px-3 py-2 text-xs bg-[#090D16] border border-slate-700 rounded text-slate-200"
+          className={selectClassName}
         >
           <option value="">All Assets</option>
           {assets.map((a) => (
@@ -167,71 +214,95 @@ export const FindingsView: React.FC<FindingsViewProps> = ({
         <button
           type="button"
           onClick={loadFindings}
-          className="px-3.5 py-2 text-xs font-medium text-slate-200 bg-slate-800 hover:bg-slate-700 rounded"
+          className="px-3.5 py-2 text-xs font-semibold text-white bg-[#2563EB] hover:bg-[#1D4ED8] rounded-md transition-colors whitespace-nowrap"
         >
           Apply
         </button>
+
+        {(severity || status || assetId || search) && (
+          <button
+            type="button"
+            onClick={resetFilters}
+            className="px-3 py-2 text-xs font-medium text-[#64748B] hover:text-[#0F172A] whitespace-nowrap"
+          >
+            Reset
+          </button>
+        )}
       </div>
 
       {/* Findings Data Table */}
-      <div className="bg-[#0F172A] border border-slate-800 rounded-md overflow-hidden">
+      <div className="bg-[#FFFFFF] border border-[#E2E8F0] rounded-lg overflow-hidden">
         {loading ? (
-          <div className="p-8 text-xs text-slate-400">Loading findings...</div>
-        ) : paged.length === 0 ? (
-          <div className="p-10 text-center text-xs text-slate-400">
-            No findings match the current filter criteria.
+          <div className="p-6 space-y-3">
+            {Array.from({ length: 5 }).map((_, idx) => (
+              <div key={idx} className="h-12 bg-[#F8FAFC] border border-[#E2E8F0] rounded animate-pulse" />
+            ))}
           </div>
+        ) : paged.length === 0 ? (
+          <EmptyState
+            icon={ShieldAlert}
+            title="No vulnerability findings match these filters"
+            description="Adjust your severity, status, or target filters, or run a new security assessment on an authorized target."
+          />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-xs">
               <thead>
-                <tr className="border-b border-slate-800 text-slate-400 bg-[#0B111E]">
-                  <th className="py-3 px-4 font-medium">Severity</th>
-                  <th className="py-3 px-4 font-medium">Finding & Classification</th>
-                  <th className="py-3 px-4 font-medium">Affected Target</th>
-                  <th className="py-3 px-4 font-medium">Status</th>
-                  <th className="py-3 px-4 font-medium text-right">CVSS 4.0</th>
-                  <th className="py-3 px-4 font-medium text-right">Updated</th>
+                <tr className="border-b border-[#E2E8F0] text-[11px] uppercase tracking-wider text-[#64748B] bg-[#F8FAFC]">
+                  <th className="py-3 px-4 font-semibold">Severity</th>
+                  <th className="py-3 px-4 font-semibold">Finding &amp; Classification</th>
+                  <th className="py-3 px-4 font-semibold">Affected Target</th>
+                  <th className="py-3 px-4 font-semibold">Status</th>
+                  <th className="py-3 px-4 font-semibold text-right">CVSS 4.0</th>
+                  <th className="py-3 px-4 font-semibold text-right">Updated</th>
+                  <th className="py-3 px-4 font-semibold text-right">Evidence</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800/80">
-                {paged.map((f) => {
-                  const sev = getSeverityStyle(f.severity);
-                  return (
-                    <tr key={f.id} className="hover:bg-slate-800/30">
-                      <td className="py-3 px-4 whitespace-nowrap">
-                        <span className={`inline-block px-2 py-0.5 rounded border text-[11px] font-medium ${sev.text} ${sev.border} ${sev.bg}`}>
-                          {sev.label}
-                        </span>
-                      </td>
-                      <td className="py-3 px-4 max-w-md">
-                        <button
-                          type="button"
-                          onClick={() => openDetail(f.id)}
-                          className="text-left font-medium text-slate-100 hover:text-blue-400 block"
-                        >
-                          {f.title}
-                        </button>
-                        <div className="mt-0.5 text-[11px] text-slate-500 font-mono">
-                          {f.finding_code} · {[f.cwe_id, f.cve_id, f.owasp_category, f.owasp_api_category].filter(Boolean).join(' · ')}
-                        </div>
-                      </td>
-                      <td className="py-3 px-4 max-w-xs">
-                        <div className="text-slate-300 truncate">{f.asset_name}</div>
-                        <div className="text-[11px] text-slate-500 font-mono truncate">{f.affected_url}</div>
-                      </td>
-                      <td className="py-3 px-4 whitespace-nowrap text-slate-300">
-                        {getVerificationStatusLabel(f.verification_status)}
-                      </td>
-                      <td className="py-3 px-4 text-right font-mono tabular-nums text-slate-200">
-                        {f.cvss_score !== null ? f.cvss_score.toFixed(1) : '—'}
-                      </td>
-                      <td className="py-3 px-4 text-right font-mono tabular-nums text-slate-400">
-                        {formatDateTime(f.updated_at)}
-                      </td>
-                    </tr>
-                  );
-                })}
+              <tbody className="divide-y divide-[#E2E8F0]">
+                {paged.map((f) => (
+                  <tr key={f.id} className="hover:bg-[#F8FAFC] transition-colors">
+                    <td className="py-3 px-4 whitespace-nowrap">
+                      <SeverityBadge severity={f.severity} />
+                    </td>
+                    <td className="py-3 px-4 max-w-md">
+                      <button
+                        type="button"
+                        onClick={() => openDetail(f.id)}
+                        className="text-left font-semibold text-[#0F172A] hover:text-[#2563EB] block"
+                      >
+                        {f.title}
+                      </button>
+                      <div className="mt-0.5 text-[11px] text-[#64748B] font-mono">
+                        {f.finding_code} · {[f.cwe_id, f.cve_id, f.owasp_category, f.owasp_api_category].filter(Boolean).join(' · ')}
+                      </div>
+                    </td>
+                    <td className="py-3 px-4 max-w-xs">
+                      <div className="text-[#334155] font-medium truncate">{f.asset_name}</div>
+                      <div className="text-[11px] text-[#64748B] font-mono truncate">
+                        {f.http_method ? `${f.http_method} ` : ''}{f.affected_url}
+                      </div>
+                    </td>
+                    <td className="py-3 px-4 whitespace-nowrap">
+                      <VerificationStatusBadge status={f.verification_status} />
+                    </td>
+                    <td className="py-3 px-4 text-right font-mono tabular-nums font-semibold text-[#0F172A]">
+                      {f.cvss_score !== null ? f.cvss_score.toFixed(1) : '—'}
+                    </td>
+                    <td className="py-3 px-4 text-right font-mono tabular-nums text-[#64748B]">
+                      {formatDateTime(f.updated_at)}
+                    </td>
+                    <td className="py-3 px-4 text-right whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => openDetail(f.id)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-[#2563EB] bg-[#EFF6FF] hover:bg-[#DBEAFE] border border-[#BFDBFE] rounded transition-colors"
+                      >
+                        <span>Details</span>
+                        <ChevronRight className="w-3 h-3" aria-hidden="true" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
@@ -239,7 +310,7 @@ export const FindingsView: React.FC<FindingsViewProps> = ({
 
         {/* Pagination */}
         {findings.length > pageSize && (
-          <div className="px-4 py-3 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
+          <div className="px-4 py-3 border-t border-[#E2E8F0] bg-[#F8FAFC] flex items-center justify-between text-xs text-[#64748B]">
             <span className="font-mono tabular-nums">
               Showing {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, findings.length)} of {findings.length}
             </span>
@@ -248,7 +319,7 @@ export const FindingsView: React.FC<FindingsViewProps> = ({
                 type="button"
                 disabled={page <= 1}
                 onClick={() => setPage(page - 1)}
-                className="px-3 py-1 bg-slate-800 rounded disabled:opacity-40"
+                className="px-3 py-1 bg-[#FFFFFF] border border-[#CBD5E1] text-[#0F172A] hover:bg-[#F1F5F9] rounded-md disabled:opacity-40"
               >
                 Previous
               </button>
@@ -256,7 +327,7 @@ export const FindingsView: React.FC<FindingsViewProps> = ({
                 type="button"
                 disabled={page >= totalPages}
                 onClick={() => setPage(page + 1)}
-                className="px-3 py-1 bg-slate-800 rounded disabled:opacity-40"
+                className="px-3 py-1 bg-[#FFFFFF] border border-[#CBD5E1] text-[#0F172A] hover:bg-[#F1F5F9] rounded-md disabled:opacity-40"
               >
                 Next
               </button>
@@ -265,16 +336,25 @@ export const FindingsView: React.FC<FindingsViewProps> = ({
         )}
       </div>
 
-      {/* Finding Detail Slide-Over */}
+      {/* Finding Technical Evidence Slide-Over */}
       {detail && (
-        <div role="dialog" aria-modal="true" aria-labelledby="finding-detail-title" className="fixed inset-0 z-50 bg-black/70 flex justify-end">
-          <div className="w-full max-w-2xl bg-[#0F172A] border-l border-slate-800 h-full overflow-y-auto p-6 space-y-6">
-            <div className="flex items-start justify-between gap-4 border-b border-slate-800 pb-4">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="finding-detail-title"
+          className="fixed inset-0 z-50 bg-[#0F172A]/40 backdrop-blur-[1px] flex justify-end"
+        >
+          <div className="w-full max-w-2xl bg-[#FFFFFF] border-l border-[#E2E8F0] shadow-2xl h-full overflow-y-auto p-6 space-y-6">
+            <div className="flex items-start justify-between gap-4 border-b border-[#E2E8F0] pb-4">
               <div>
-                <div className="text-xs font-mono text-slate-400">
-                  {detail.finding.finding_code} · {detail.finding.scanner_module} · Confidence: {detail.finding.confidence}
+                <div className="flex flex-wrap items-center gap-2">
+                  <SeverityBadge severity={detail.finding.severity} />
+                  <VerificationStatusBadge status={detail.finding.verification_status} />
+                  <span className="text-xs font-mono text-[#64748B]">
+                    {detail.finding.finding_code} · {detail.finding.scanner_module} · Confidence: {detail.finding.confidence}
+                  </span>
                 </div>
-                <h2 id="finding-detail-title" className="mt-1 text-lg font-semibold text-slate-100">
+                <h2 id="finding-detail-title" className="mt-2 text-lg font-semibold text-[#0F172A] leading-snug">
                   {detail.finding.title}
                 </h2>
               </div>
@@ -282,7 +362,7 @@ export const FindingsView: React.FC<FindingsViewProps> = ({
                 type="button"
                 onClick={() => setDetail(null)}
                 aria-label="Close finding details"
-                className="p-1.5 text-slate-400 hover:text-white rounded border border-slate-800"
+                className="p-1.5 text-[#64748B] hover:text-[#0F172A] hover:bg-[#F1F5F9] rounded-md border border-[#E2E8F0]"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -290,49 +370,51 @@ export const FindingsView: React.FC<FindingsViewProps> = ({
 
             {/* Metadata Grid */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-              <div className="p-3 bg-[#090D16] border border-slate-800 rounded">
-                <div className="text-slate-500">Severity</div>
-                <div className="mt-1 font-semibold capitalize text-slate-100">{detail.finding.severity}</div>
+              <div className="p-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-md">
+                <div className="text-[#64748B]">Severity</div>
+                <div className="mt-1 font-semibold capitalize text-[#0F172A]">{detail.finding.severity}</div>
               </div>
-              <div className="p-3 bg-[#090D16] border border-slate-800 rounded">
-                <div className="text-slate-500">CVSS 4.0</div>
-                <div className="mt-1 font-mono font-semibold text-slate-100">
+              <div className="p-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-md">
+                <div className="text-[#64748B]">CVSS 4.0</div>
+                <div className="mt-1 font-mono tabular-nums font-semibold text-[#0F172A]">
                   {detail.finding.cvss_score !== null ? detail.finding.cvss_score.toFixed(1) : 'Not scored'}
                 </div>
               </div>
-              <div className="p-3 bg-[#090D16] border border-slate-800 rounded">
-                <div className="text-slate-500">CWE / CVE</div>
-                <div className="mt-1 font-mono text-slate-200 truncate">
+              <div className="p-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-md">
+                <div className="text-[#64748B]">CWE / CVE</div>
+                <div className="mt-1 font-mono text-[#0F172A] truncate">
                   {detail.finding.cve_id || detail.finding.cwe_id || '—'}
                 </div>
               </div>
-              <div className="p-3 bg-[#090D16] border border-slate-800 rounded">
-                <div className="text-slate-500">OWASP</div>
-                <div className="mt-1 font-mono text-slate-200 truncate">
+              <div className="p-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-md">
+                <div className="text-[#64748B]">OWASP</div>
+                <div className="mt-1 font-mono text-[#0F172A] truncate">
                   {detail.finding.owasp_api_category || detail.finding.owasp_category || '—'}
                 </div>
               </div>
             </div>
 
-            <div className="space-y-4 text-xs">
+            <div className="space-y-5 text-xs">
               <div>
-                <h3 className="font-semibold text-slate-200 mb-1">Affected Component</h3>
-                <div className="p-2.5 bg-[#090D16] border border-slate-800 rounded font-mono text-slate-300 break-all">
-                  {detail.finding.http_method ? `${detail.finding.http_method} ` : ''}{detail.finding.affected_url}
-                  {detail.finding.parameter_name ? ` (parameter: ${detail.finding.parameter_name})` : ''}
-                </div>
+                <h3 className="font-semibold text-[#0F172A] mb-1.5">Affected Component</h3>
+                <CodeBlock
+                  label="Target Endpoint & Parameter"
+                  content={`${detail.finding.http_method ? `${detail.finding.http_method} ` : ''}${detail.finding.affected_url}${
+                    detail.finding.parameter_name ? `\nParameter: ${detail.finding.parameter_name}` : ''
+                  }`}
+                />
               </div>
 
               <div>
-                <h3 className="font-semibold text-slate-200 mb-1">Description & Technical Explanation</h3>
-                <p className="text-slate-300 leading-relaxed">{detail.finding.description}</p>
-                <p className="mt-1.5 text-slate-400 leading-relaxed">{detail.finding.technical_explanation}</p>
+                <h3 className="font-semibold text-[#0F172A] mb-1.5">Description &amp; Technical Explanation</h3>
+                <p className="text-[#334155] leading-relaxed">{detail.finding.description}</p>
+                <p className="mt-2 text-[#475569] leading-relaxed">{detail.finding.technical_explanation}</p>
                 {detail.finding.detection_technique && (
-                  <p className="mt-1.5 text-[11px] text-blue-300 font-mono">
+                  <div className="mt-2 px-3 py-2 bg-[#EFF6FF] border border-[#BFDBFE] rounded-md text-[11px] text-[#1E40AF] font-mono">
                     Detection Technique: {detail.finding.detection_technique}
-                  </p>
+                  </div>
                 )}
-                <p className="mt-1.5 text-[11px] text-slate-500">
+                <p className="mt-2 text-[11px] text-[#64748B]">
                   CVSS Rationale: {detail.finding.cvss_rationale}
                   {detail.finding.cvss_vector ? ` (${detail.finding.cvss_vector})` : ''}
                 </p>
@@ -340,40 +422,37 @@ export const FindingsView: React.FC<FindingsViewProps> = ({
 
               {/* Evidence Viewer */}
               <div>
-                <h3 className="font-semibold text-slate-200 mb-1.5">Collected Technical Evidence</h3>
-                <div className="space-y-2">
+                <h3 className="font-semibold text-[#0F172A] mb-2">Collected Technical Evidence</h3>
+                <div className="space-y-2.5">
                   {detail.evidence.map((ev) => (
-                    <div key={ev.id} className="bg-[#090D16] border border-slate-800 rounded p-3">
-                      <div className="text-[11px] text-blue-400 font-medium mb-1">
-                        {ev.evidence_type} · {ev.summary}
-                      </div>
-                      <pre className="text-[11px] font-mono text-slate-300 whitespace-pre-wrap break-all">
-                        {ev.raw_excerpt}
-                      </pre>
-                    </div>
+                    <CodeBlock
+                      key={ev.id}
+                      label={`${ev.evidence_type} · ${ev.summary}`}
+                      content={ev.raw_excerpt}
+                    />
                   ))}
                 </div>
               </div>
 
               <div>
-                <h3 className="font-semibold text-slate-200 mb-1">Business Impact & Remediation</h3>
-                <p className="text-slate-400">{detail.finding.business_impact}</p>
-                <div className="mt-2 p-3 bg-blue-950/20 border border-blue-900/50 rounded text-slate-200 leading-relaxed">
+                <h3 className="font-semibold text-[#0F172A] mb-1.5">Business Impact &amp; Remediation</h3>
+                <p className="text-[#475569] leading-relaxed">{detail.finding.business_impact}</p>
+                <div className="mt-2.5 p-3.5 bg-[#EFF6FF] border border-[#BFDBFE] rounded-md text-[#1E3A8A] leading-relaxed">
                   {detail.finding.remediation_instructions}
                 </div>
               </div>
 
               {detail.finding.references && detail.finding.references.length > 0 && (
                 <div>
-                  <h3 className="font-semibold text-slate-200 mb-1">References</h3>
-                  <div className="space-y-1">
+                  <h3 className="font-semibold text-[#0F172A] mb-1.5">References</h3>
+                  <div className="flex flex-wrap gap-3">
                     {detail.finding.references.map((ref) => (
                       <a
                         key={ref}
                         href={ref}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-blue-400 hover:underline mr-4"
+                        className="inline-flex items-center gap-1 text-[#2563EB] hover:text-[#1E40AF] hover:underline"
                       >
                         <span>{ref}</span>
                         <ExternalLink className="w-3 h-3" aria-hidden="true" />
@@ -385,14 +464,14 @@ export const FindingsView: React.FC<FindingsViewProps> = ({
 
               {/* Remediation & Verification Workflow */}
               {canTriage && (
-                <form onSubmit={handleStatusUpdate} className="pt-4 border-t border-slate-800 space-y-3">
-                  <h3 className="font-semibold text-slate-200">Update Verification Status</h3>
+                <form onSubmit={handleStatusUpdate} className="pt-4 border-t border-[#E2E8F0] space-y-3">
+                  <h3 className="font-semibold text-[#0F172A]">Update Verification Status</h3>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <select
                       value={nextStatus}
                       onChange={(e) => setNextStatus(e.target.value)}
                       aria-label="New verification status"
-                      className="px-3 py-2 bg-[#090D16] border border-slate-700 rounded text-slate-100"
+                      className={selectClassName}
                     >
                       <option value="open">Open</option>
                       <option value="confirmed">Confirmed</option>
@@ -407,13 +486,13 @@ export const FindingsView: React.FC<FindingsViewProps> = ({
                       value={rationale}
                       onChange={(e) => setRationale(e.target.value)}
                       placeholder="Rationale (e.g. Patched CSP header in Nginx)"
-                      className="sm:col-span-2 px-3 py-2 bg-[#090D16] border border-slate-700 rounded text-slate-100"
+                      className={`${inputClassName} sm:col-span-2`}
                     />
                   </div>
                   <button
                     type="submit"
                     disabled={updatingStatus}
-                    className="px-4 py-2 font-medium text-white bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded"
+                    className="px-4 py-2 font-semibold text-white bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-50 rounded-md shadow-xs"
                   >
                     {updatingStatus ? 'Saving...' : 'Save Status Change'}
                   </button>
@@ -421,16 +500,16 @@ export const FindingsView: React.FC<FindingsViewProps> = ({
               )}
 
               {/* Status Audit History */}
-              <div className="pt-3 border-t border-slate-800">
-                <h3 className="font-semibold text-slate-200 mb-2">Status Audit History</h3>
+              <div className="pt-4 border-t border-[#E2E8F0]">
+                <h3 className="font-semibold text-[#0F172A] mb-2">Status Audit History</h3>
                 <div className="space-y-1.5">
                   {detail.history.map((h) => (
-                    <div key={h.id} className="text-[11px] text-slate-400">
-                      <span className="font-mono text-slate-500">{formatDateTime(h.changed_at)}</span> ·{' '}
-                      <span className="text-slate-200">{h.changed_by_name}</span>{' '}
+                    <div key={h.id} className="text-[11px] text-[#64748B] bg-[#F8FAFC] border border-[#E2E8F0] rounded px-3 py-2">
+                      <span className="font-mono text-[#64748B]">{formatDateTime(h.changed_at)}</span> ·{' '}
+                      <span className="font-medium text-[#0F172A]">{h.changed_by_name}</span>{' '}
                       <span>changed </span>
-                      <span className="font-mono">{h.previous_status}</span> →{' '}
-                      <span className="font-mono text-blue-400">{h.new_status}</span>: {h.rationale}
+                      <span className="font-mono text-[#475569]">{h.previous_status}</span> →{' '}
+                      <span className="font-mono font-semibold text-[#2563EB]">{h.new_status}</span>: {h.rationale}
                     </div>
                   ))}
                 </div>

@@ -3,6 +3,7 @@ import { FileDown, FileSpreadsheet, FileJson, Info } from 'lucide-react';
 import { apiRequest, downloadAuthenticatedBlob } from '../api/client';
 import type { ScanRecord } from '../types/sentinel';
 import { formatBytes, formatDateTime } from '../utils/formatters';
+import { selectClassName } from './ui';
 
 interface ComplianceReportsViewProps {
   scans: ScanRecord[];
@@ -128,17 +129,19 @@ export const ComplianceReportsView: React.FC<ComplianceReportsViewProps> = ({ sc
   return (
     <div className="space-y-6">
       {/* Report Export Panel */}
-      <div className="bg-[#0F172A] border border-slate-800 rounded-md p-6 space-y-5">
-        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-4">
+      <div className="bg-[#FFFFFF] border border-[#E2E8F0] rounded-lg p-6 space-y-5">
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#E2E8F0] pb-4">
           <div>
-            <h2 className="text-base font-semibold text-slate-100">Security Assessment Report Generator</h2>
-            <p className="text-xs text-slate-400">Export verified scan evidence, charts, header tables, and remediation roadmaps in PDF, CSV, or JSON.</p>
+            <h2 className="text-base font-semibold text-[#0F172A]">Security Assessment Report Generator</h2>
+            <p className="mt-0.5 text-xs text-[#64748B]">
+              Export verified scan evidence, charts, header tables, and remediation roadmaps in PDF, CSV, or JSON.
+            </p>
           </div>
           <select
             value={selectedScanId}
             onChange={(e) => setSelectedScanId(e.target.value)}
             aria-label="Select completed scan for export"
-            className="px-3 py-2 text-xs bg-[#090D16] border border-slate-700 rounded text-slate-100 min-w-[260px]"
+            className={`${selectClassName} min-w-[260px]`}
           >
             {completedScans.length === 0 ? (
               <option value="">No completed scans available</option>
@@ -153,10 +156,10 @@ export const ComplianceReportsView: React.FC<ComplianceReportsViewProps> = ({ sc
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="p-4 bg-[#090D16] border border-slate-800 rounded flex flex-col justify-between">
+          <div className="p-4 bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg flex flex-col justify-between">
             <div>
-              <div className="text-xs font-semibold text-slate-100">Executive & Technical PDF Report</div>
-              <p className="mt-1 text-[11px] text-slate-400 leading-relaxed">
+              <div className="text-xs font-semibold text-[#0F172A]">Executive &amp; Technical PDF Report</div>
+              <p className="mt-1.5 text-[11px] text-[#64748B] leading-relaxed">
                 Multi-page consulting report with cover page, severity charts, technical findings, headers, compliance matrix, and roadmap.
               </p>
             </div>
@@ -164,24 +167,24 @@ export const ComplianceReportsView: React.FC<ComplianceReportsViewProps> = ({ sc
               type="button"
               disabled={!selectedScanId || downloading !== null}
               onClick={() => handleExport('pdf')}
-              className="mt-4 inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-medium text-white bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded"
+              className="mt-4 inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-40 rounded-md shadow-xs"
             >
               <FileDown className="w-3.5 h-3.5" aria-hidden="true" />
               <span>{downloading === 'pdf' ? 'Rendering PDF...' : 'Download PDF Report'}</span>
             </button>
           </div>
 
-          <div className="p-4 bg-[#090D16] border border-slate-800 rounded flex flex-col justify-between">
+          <div className="p-4 bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg flex flex-col justify-between">
             <div>
-              <div className="text-xs font-semibold text-slate-100">Scoped CSV Inventory Export</div>
-              <label htmlFor="csv-scope-select" className="block mt-2 text-[11px] text-slate-400 mb-1">
+              <div className="text-xs font-semibold text-[#0F172A]">Scoped CSV Inventory Export</div>
+              <label htmlFor="csv-scope-select" className="block mt-2 text-[11px] font-medium text-[#475569] mb-1">
                 Export Dataset Scope
               </label>
               <select
                 id="csv-scope-select"
                 value={csvScope}
                 onChange={(e) => setCsvScope(e.target.value)}
-                className="w-full px-2.5 py-1.5 text-xs bg-[#0F172A] border border-slate-700 rounded text-slate-200"
+                className={`${selectClassName} w-full`}
               >
                 {CSV_SCOPES.map((sc) => (
                   <option key={sc.id} value={sc.id}>{sc.label}</option>
@@ -192,17 +195,17 @@ export const ComplianceReportsView: React.FC<ComplianceReportsViewProps> = ({ sc
               type="button"
               disabled={!selectedScanId || downloading !== null}
               onClick={() => handleExport('csv')}
-              className="mt-4 inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-medium text-slate-100 bg-slate-800 hover:bg-slate-700 border border-slate-700 disabled:opacity-40 rounded"
+              className="mt-4 inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-semibold text-[#0F172A] bg-[#FFFFFF] hover:bg-[#F1F5F9] border border-[#CBD5E1] disabled:opacity-40 rounded-md"
             >
-              <FileSpreadsheet className="w-3.5 h-3.5" aria-hidden="true" />
+              <FileSpreadsheet className="w-3.5 h-3.5 text-[#2563EB]" aria-hidden="true" />
               <span>{downloading === 'csv' ? 'Exporting CSV...' : 'Download CSV'}</span>
             </button>
           </div>
 
-          <div className="p-4 bg-[#090D16] border border-slate-800 rounded flex flex-col justify-between">
+          <div className="p-4 bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg flex flex-col justify-between">
             <div>
-              <div className="text-xs font-semibold text-slate-100">Structured JSON Telemetry Bundle</div>
-              <p className="mt-1 text-[11px] text-slate-400 leading-relaxed">
+              <div className="text-xs font-semibold text-[#0F172A]">Structured JSON Telemetry Bundle</div>
+              <p className="mt-1.5 text-[11px] text-[#64748B] leading-relaxed">
                 Complete machine-readable dataset for SIEM ingestion, CI/CD gates, and archival diffing.
               </p>
             </div>
@@ -210,9 +213,9 @@ export const ComplianceReportsView: React.FC<ComplianceReportsViewProps> = ({ sc
               type="button"
               disabled={!selectedScanId || downloading !== null}
               onClick={() => handleExport('json')}
-              className="mt-4 inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-medium text-slate-100 bg-slate-800 hover:bg-slate-700 border border-slate-700 disabled:opacity-40 rounded"
+              className="mt-4 inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-semibold text-[#0F172A] bg-[#FFFFFF] hover:bg-[#F1F5F9] border border-[#CBD5E1] disabled:opacity-40 rounded-md"
             >
-              <FileJson className="w-3.5 h-3.5" aria-hidden="true" />
+              <FileJson className="w-3.5 h-3.5 text-[#2563EB]" aria-hidden="true" />
               <span>{downloading === 'json' ? 'Exporting JSON...' : 'Download JSON'}</span>
             </button>
           </div>
@@ -220,14 +223,14 @@ export const ComplianceReportsView: React.FC<ComplianceReportsViewProps> = ({ sc
       </div>
 
       {/* Compliance Framework Mapping */}
-      <div className="bg-[#0F172A] border border-slate-800 rounded-md overflow-hidden">
-        <div className="p-5 border-b border-slate-800 space-y-3">
+      <div className="bg-[#FFFFFF] border border-[#E2E8F0] rounded-lg overflow-hidden">
+        <div className="p-5 border-b border-[#E2E8F0] space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-4">
-            <h2 className="text-sm font-semibold text-slate-100">Compliance & Security Framework Coverage</h2>
+            <h2 className="text-sm font-semibold text-[#0F172A]">Compliance &amp; Security Framework Coverage</h2>
           </div>
           {notice && (
-            <div className="flex items-start gap-2 p-3 bg-[#090D16] border border-slate-800 rounded text-xs text-slate-300">
-              <Info className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" aria-hidden="true" />
+            <div className="flex items-start gap-2.5 p-3 bg-[#EFF6FF] border border-[#BFDBFE] rounded-md text-xs text-[#1E40AF]">
+              <Info className="w-4 h-4 text-[#2563EB] shrink-0 mt-0.5" aria-hidden="true" />
               <span>{notice}</span>
             </div>
           )}
@@ -237,10 +240,10 @@ export const ComplianceReportsView: React.FC<ComplianceReportsViewProps> = ({ sc
                 key={fw.id}
                 type="button"
                 onClick={() => setActiveFrameworkId(fw.id)}
-                className={`px-3 py-1.5 text-xs font-medium rounded border transition-colors whitespace-nowrap ${
+                className={`px-3 py-1.5 text-xs font-medium rounded-md border transition-colors whitespace-nowrap ${
                   activeFrameworkId === fw.id
-                    ? 'bg-slate-800 border-slate-600 text-slate-100'
-                    : 'bg-[#090D16] border-slate-800 text-slate-400 hover:text-slate-200'
+                    ? 'bg-[#EFF6FF] border-[#2563EB] text-[#1E40AF] font-semibold'
+                    : 'bg-[#FFFFFF] border-[#E2E8F0] text-[#475569] hover:text-[#0F172A] hover:bg-[#F8FAFC]'
                 }`}
               >
                 {fw.name}
@@ -252,36 +255,38 @@ export const ComplianceReportsView: React.FC<ComplianceReportsViewProps> = ({ sc
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
-              <tr className="border-b border-slate-800 text-slate-400 bg-[#0B111E]">
-                <th className="py-2.5 px-4 font-medium">Control</th>
-                <th className="py-2.5 px-4 font-medium">Title & Category</th>
-                <th className="py-2.5 px-4 font-medium">Assessed Status</th>
-                <th className="py-2.5 px-4 font-medium">Evidence & Notes</th>
+              <tr className="border-b border-[#E2E8F0] text-[11px] uppercase tracking-wider text-[#64748B] bg-[#F8FAFC]">
+                <th className="py-2.5 px-4 font-semibold">Control</th>
+                <th className="py-2.5 px-4 font-semibold">Title &amp; Category</th>
+                <th className="py-2.5 px-4 font-semibold">Assessed Status</th>
+                <th className="py-2.5 px-4 font-semibold">Evidence &amp; Notes</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-800/80">
+            <tbody className="divide-y divide-[#E2E8F0]">
               {activeControls.map((c) => {
                 const m = mappingByControl.get(c.id);
                 const status = m?.status || 'not_assessed';
-                const statusColor =
+                const statusBadge =
                   status === 'passed'
-                    ? 'text-emerald-400'
+                    ? 'text-[#15803D] bg-[#F0FDF4] border-[#BBF7D0]'
                     : status === 'failed'
-                      ? 'text-red-400'
+                      ? 'text-[#B91C1C] bg-[#FEF2F2] border-[#FECACA]'
                       : status === 'partial'
-                        ? 'text-amber-400'
-                        : 'text-slate-500';
+                        ? 'text-[#B45309] bg-[#FFFBEB] border-[#FDE68A]'
+                        : 'text-[#64748B] bg-[#F8FAFC] border-[#E2E8F0]';
                 return (
-                  <tr key={c.id} className="hover:bg-slate-800/30">
-                    <td className="py-2.5 px-4 font-mono text-slate-200 whitespace-nowrap">{c.control_code}</td>
+                  <tr key={c.id} className="hover:bg-[#F8FAFC] transition-colors">
+                    <td className="py-2.5 px-4 font-mono font-medium text-[#0F172A] whitespace-nowrap">{c.control_code}</td>
                     <td className="py-2.5 px-4">
-                      <div className="font-medium text-slate-100">{c.title}</div>
-                      <div className="text-[11px] text-slate-500">{c.category}</div>
+                      <div className="font-medium text-[#0F172A]">{c.title}</div>
+                      <div className="text-[11px] text-[#64748B]">{c.category}</div>
                     </td>
-                    <td className={`py-2.5 px-4 font-mono whitespace-nowrap capitalize ${statusColor}`}>
-                      {status.replace('_', ' ')}
+                    <td className="py-2.5 px-4 whitespace-nowrap">
+                      <span className={`inline-flex px-2 py-0.5 rounded border font-mono text-[11px] font-semibold capitalize ${statusBadge}`}>
+                        {status.replace('_', ' ')}
+                      </span>
                     </td>
-                    <td className="py-2.5 px-4 text-slate-400 max-w-md">
+                    <td className="py-2.5 px-4 text-[#475569] max-w-md">
                       {m?.notes || `Requires: ${c.evidence_required}`}
                     </td>
                   </tr>
@@ -294,29 +299,33 @@ export const ComplianceReportsView: React.FC<ComplianceReportsViewProps> = ({ sc
 
       {/* Report History */}
       {reportHistory.length > 0 && (
-        <div className="bg-[#0F172A] border border-slate-800 rounded-md overflow-hidden">
-          <div className="px-5 py-3.5 border-b border-slate-800 text-sm font-semibold text-slate-100">
+        <div className="bg-[#FFFFFF] border border-[#E2E8F0] rounded-lg overflow-hidden">
+          <div className="px-5 py-3.5 border-b border-[#E2E8F0] text-sm font-semibold text-[#0F172A]">
             Generated Report Archive
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-xs">
               <thead>
-                <tr className="border-b border-slate-800 text-slate-400 bg-[#0B111E]">
-                  <th className="py-2.5 px-4 font-medium">Filename</th>
-                  <th className="py-2.5 px-4 font-medium">Target</th>
-                  <th className="py-2.5 px-4 font-medium">Format / Scope</th>
-                  <th className="py-2.5 px-4 font-medium text-right">Size</th>
-                  <th className="py-2.5 px-4 font-medium text-right">Generated</th>
+                <tr className="border-b border-[#E2E8F0] text-[11px] uppercase tracking-wider text-[#64748B] bg-[#F8FAFC]">
+                  <th className="py-2.5 px-4 font-semibold">Filename</th>
+                  <th className="py-2.5 px-4 font-semibold">Target</th>
+                  <th className="py-2.5 px-4 font-semibold">Format / Scope</th>
+                  <th className="py-2.5 px-4 font-semibold text-right">Size</th>
+                  <th className="py-2.5 px-4 font-semibold text-right">Generated</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800/80">
+              <tbody className="divide-y divide-[#E2E8F0]">
                 {reportHistory.map((r) => (
-                  <tr key={r.id}>
-                    <td className="py-2.5 px-4 font-mono text-slate-200">{r.filename}</td>
-                    <td className="py-2.5 px-4 text-slate-300">{r.asset_name}</td>
-                    <td className="py-2.5 px-4 uppercase font-mono text-slate-400">{r.format} · {r.export_scope}</td>
-                    <td className="py-2.5 px-4 text-right font-mono tabular-nums text-slate-400">{formatBytes(r.file_size_bytes)}</td>
-                    <td className="py-2.5 px-4 text-right font-mono tabular-nums text-slate-400">{formatDateTime(r.created_at)}</td>
+                  <tr key={r.id} className="hover:bg-[#F8FAFC]">
+                    <td className="py-2.5 px-4 font-mono font-medium text-[#0F172A]">{r.filename}</td>
+                    <td className="py-2.5 px-4 text-[#334155]">{r.asset_name}</td>
+                    <td className="py-2.5 px-4 uppercase font-mono text-[#64748B]">{r.format} · {r.export_scope}</td>
+                    <td className="py-2.5 px-4 text-right font-mono tabular-nums text-[#475569]">
+                      {formatBytes(r.file_size_bytes)}
+                    </td>
+                    <td className="py-2.5 px-4 text-right font-mono tabular-nums text-[#64748B]">
+                      {formatDateTime(r.created_at)}
+                    </td>
                   </tr>
                 ))}
               </tbody>

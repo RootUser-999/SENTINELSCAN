@@ -30,6 +30,7 @@ export default function App() {
   const [user, setUser] = useState<UserSession | null>(null);
   const [activeTab, setActiveTab] = useState<NavTab>('overview');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [assets, setAssets] = useState<Asset[]>([]);
@@ -99,7 +100,7 @@ export default function App() {
     (summary?.metrics.low || 0);
 
   return (
-    <div className="min-h-screen bg-[#090D16] text-slate-100 flex">
+    <div className="min-h-screen bg-[#F8FAFC] text-[#0F172A] flex">
       <Sidebar
         activeTab={activeTab}
         onSelectTab={(tab) => {
@@ -112,27 +113,30 @@ export default function App() {
         onLogout={handleLogout}
         mobileOpen={mobileMenuOpen}
         onCloseMobile={() => setMobileMenuOpen(false)}
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={() => setSidebarCollapsed((c) => !c)}
       />
 
       <div className="flex-1 min-w-0 flex flex-col">
         <TopBar
           activeTab={activeTab}
           organizationName={user.organizationName}
+          user={user}
           onOpenMobileMenu={() => setMobileMenuOpen(true)}
           canLaunch={user.role === 'admin' || user.role === 'analyst'}
           onLaunchAssessmentClick={() => {
             const firstVerified = assets.find((a) => a.ownership_status === 'verified');
             if (!firstVerified) {
               setActiveTab('assets');
-              addToast('Register and verify ownership of an asset before launching a scan.', 'error');
+              addToast('Register and authorize a target asset before launching an assessment.', 'error');
               return;
             }
             setPreselectedAssetId(firstVerified.id);
-            setActiveTab('scans');
+            setActiveTab('new-assessment');
           }}
         />
 
-        <main className="flex-1 p-4 lg:p-6 max-w-[1440px] w-full mx-auto">
+        <main className="flex-1 min-w-0 p-4 sm:p-6 max-w-[1440px] w-full mx-auto">
           {activeTab === 'overview' && (
             <OverviewDashboard
               summary={summary}
@@ -158,13 +162,13 @@ export default function App() {
               onRefresh={refreshWorkspaceData}
               onLaunchScanForAsset={(aid) => {
                 setPreselectedAssetId(aid);
-                setActiveTab('scans');
+                setActiveTab('new-assessment');
               }}
               onToast={addToast}
             />
           )}
 
-          {activeTab === 'scans' && (
+          {(activeTab === 'scans' || activeTab === 'new-assessment') && (
             <ScansView
               assets={assets}
               scans={scans}
@@ -172,6 +176,8 @@ export default function App() {
               userRole={user.role}
               preselectedAssetId={preselectedAssetId}
               selectedScanId={selectedScanId}
+              initialMode={activeTab === 'new-assessment' ? 'launch' : 'console'}
+              onNavigateTab={(tab) => setActiveTab(tab)}
               onSelectScanId={setSelectedScanId}
               onRefresh={refreshWorkspaceData}
               onToast={addToast}
@@ -220,10 +226,10 @@ export default function App() {
           <div
             key={t.id}
             role="status"
-            className={`px-4 py-2.5 rounded border text-xs shadow-lg ${
+            className={`px-4 py-2.5 rounded-lg border text-xs font-medium shadow-md ${
               t.type === 'error'
-                ? 'bg-red-950/95 border-red-700 text-red-200'
-                : 'bg-[#0F172A] border-slate-700 text-slate-100'
+                ? 'bg-[#FEF2F2] border-[#FECACA] text-[#B91C1C]'
+                : 'bg-[#FFFFFF] border-[#CBD5E1] text-[#0F172A]'
             }`}
           >
             {t.message}

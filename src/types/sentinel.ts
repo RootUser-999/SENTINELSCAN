@@ -1,6 +1,7 @@
 export type NavTab =
   | 'overview'
   | 'assets'
+  | 'new-assessment'
   | 'scans'
   | 'findings'
   | 'api-code'

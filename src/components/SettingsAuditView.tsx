@@ -3,6 +3,7 @@ import { KeyRound, Lock, Shield, Trash2, UserPlus } from 'lucide-react';
 import { apiRequest } from '../api/client';
 import type { Asset, UserSession } from '../types/sentinel';
 import { formatDateTime } from '../utils/formatters';
+import { inputClassName, selectClassName } from './ui';
 
 interface SettingsAuditViewProps {
   user: UserSession;
@@ -141,18 +142,20 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
     <div className="space-y-6">
       {/* Credential Vault */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        <div className="lg:col-span-5 bg-[#0F172A] border border-slate-800 rounded-md p-5 space-y-4">
-          <div className="flex items-center gap-2 text-sm font-semibold text-slate-100">
-            <Lock className="w-4 h-4 text-blue-400" aria-hidden="true" />
+        <div className="lg:col-span-5 min-w-0 bg-[#FFFFFF] border border-[#E2E8F0] rounded-lg p-5 space-y-4">
+          <div className="flex items-center gap-2 text-sm font-semibold text-[#0F172A]">
+            <Lock className="w-4 h-4 text-[#2563EB]" aria-hidden="true" />
             <h2>Authenticated Scan Credential Vault</h2>
           </div>
-          <p className="text-xs text-slate-400">
+          <p className="text-xs text-[#64748B] leading-relaxed">
             Secrets are encrypted at rest with AES-256-GCM, automatically expire, and are redacted from scan logs and reports.
           </p>
           {(user.role === 'admin' || user.role === 'analyst') && (
             <form onSubmit={handleSaveCredential} className="space-y-3 text-xs">
               <div>
-                <label htmlFor="cred-label" className="block text-slate-300 mb-1">Credential Label</label>
+                <label htmlFor="cred-label" className="block font-medium text-[#334155] mb-1">
+                  Credential Label
+                </label>
                 <input
                   id="cred-label"
                   type="text"
@@ -160,17 +163,19 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
                   value={credLabel}
                   onChange={(e) => setCredLabel(e.target.value)}
                   placeholder="Staging Test User JWT"
-                  className="w-full px-3 py-2 bg-[#090D16] border border-slate-700 rounded text-slate-100"
+                  className={inputClassName}
                 />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label htmlFor="cred-type" className="block text-slate-300 mb-1">Auth Type</label>
+                  <label htmlFor="cred-type" className="block font-medium text-[#334155] mb-1">
+                    Auth Type
+                  </label>
                   <select
                     id="cred-type"
                     value={credType}
                     onChange={(e) => setCredType(e.target.value as typeof credType)}
-                    className="w-full px-2.5 py-2 bg-[#090D16] border border-slate-700 rounded text-slate-100"
+                    className={`${selectClassName} w-full`}
                   >
                     <option value="bearer_token">Bearer Token</option>
                     <option value="cookie">Session Cookie</option>
@@ -179,12 +184,14 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
                   </select>
                 </div>
                 <div>
-                  <label htmlFor="cred-role" className="block text-slate-300 mb-1">Role Profile</label>
+                  <label htmlFor="cred-role" className="block font-medium text-[#334155] mb-1">
+                    Role Profile
+                  </label>
                   <select
                     id="cred-role"
                     value={credRole}
                     onChange={(e) => setCredRole(e.target.value as typeof credRole)}
-                    className="w-full px-2.5 py-2 bg-[#090D16] border border-slate-700 rounded text-slate-100"
+                    className={`${selectClassName} w-full`}
                   >
                     <option value="authenticated_user">Authenticated User</option>
                     <option value="administrator">Test Administrator</option>
@@ -193,12 +200,14 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
                 </div>
               </div>
               <div>
-                <label htmlFor="cred-asset" className="block text-slate-300 mb-1">Scoped Asset (Optional)</label>
+                <label htmlFor="cred-asset" className="block font-medium text-[#334155] mb-1">
+                  Scoped Asset (Optional)
+                </label>
                 <select
                   id="cred-asset"
                   value={credAssetId}
                   onChange={(e) => setCredAssetId(e.target.value)}
-                  className="w-full px-2.5 py-2 bg-[#090D16] border border-slate-700 rounded text-slate-100"
+                  className={`${selectClassName} w-full`}
                 >
                   <option value="">Any verified organization asset</option>
                   {assets.map((a) => (
@@ -209,18 +218,22 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
               {credType === 'login_form' && (
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label htmlFor="cred-login-url" className="block text-slate-300 mb-1">Login Endpoint Path/URL</label>
+                    <label htmlFor="cred-login-url" className="block font-medium text-[#334155] mb-1">
+                      Login Endpoint Path/URL
+                    </label>
                     <input
                       id="cred-login-url"
                       type="text"
                       value={credLoginUrl}
                       onChange={(e) => setCredLoginUrl(e.target.value)}
                       placeholder="/login"
-                      className="w-full px-3 py-2 bg-[#090D16] border border-slate-700 rounded text-slate-100"
+                      className={inputClassName}
                     />
                   </div>
                   <div>
-                    <label htmlFor="cred-username" className="block text-slate-300 mb-1">Test Username / Email</label>
+                    <label htmlFor="cred-username" className="block font-medium text-[#334155] mb-1">
+                      Test Username / Email
+                    </label>
                     <input
                       id="cred-username"
                       type="text"
@@ -228,13 +241,13 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
                       value={credUsernameHint}
                       onChange={(e) => setCredUsernameHint(e.target.value)}
                       placeholder="qa-user@example.test"
-                      className="w-full px-3 py-2 bg-[#090D16] border border-slate-700 rounded text-slate-100"
+                      className={inputClassName}
                     />
                   </div>
                 </div>
               )}
               <div>
-                <label htmlFor="cred-secret" className="block text-slate-300 mb-1">
+                <label htmlFor="cred-secret" className="block font-medium text-[#334155] mb-1">
                   {credType === 'login_form' ? 'Test Account Password' : 'Secret Token / Cookie Value'}
                 </label>
                 <input
@@ -244,32 +257,32 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
                   value={credSecret}
                   onChange={(e) => setCredSecret(e.target.value)}
                   placeholder="Encrypted immediately on server"
-                  className="w-full px-3 py-2 bg-[#090D16] border border-slate-700 rounded text-slate-100"
+                  className={inputClassName}
                 />
               </div>
               <button
                 type="submit"
-                className="w-full py-2 font-medium text-white bg-blue-600 hover:bg-blue-500 rounded"
+                className="w-full py-2 font-semibold text-white bg-[#2563EB] hover:bg-[#1D4ED8] rounded-md shadow-xs"
               >
-                Encrypt & Store Credential
+                Encrypt &amp; Store Credential
               </button>
             </form>
           )}
         </div>
 
-        <div className="lg:col-span-7 bg-[#0F172A] border border-slate-800 rounded-md overflow-hidden">
-          <div className="px-5 py-3.5 border-b border-slate-800 text-sm font-semibold text-slate-100">
+        <div className="lg:col-span-7 min-w-0 bg-[#FFFFFF] border border-[#E2E8F0] rounded-lg overflow-hidden">
+          <div className="px-5 py-3.5 border-b border-[#E2E8F0] text-sm font-semibold text-[#0F172A]">
             Stored Credentials ({credentials.length})
           </div>
           {credentials.length === 0 ? (
-            <div className="p-6 text-xs text-slate-500">No encrypted scan credentials stored.</div>
+            <div className="p-6 text-xs text-[#64748B]">No encrypted scan credentials stored.</div>
           ) : (
-            <div className="divide-y divide-slate-800/80 text-xs">
+            <div className="divide-y divide-[#E2E8F0] text-xs">
               {credentials.map((c) => (
-                <div key={c.id} className="px-5 py-3 flex items-center justify-between gap-4">
+                <div key={c.id} className="px-5 py-3 flex items-center justify-between gap-4 hover:bg-[#F8FAFC]">
                   <div>
-                    <div className="font-medium text-slate-200">{c.label}</div>
-                    <div className="text-[11px] text-slate-500 font-mono">
+                    <div className="font-semibold text-[#0F172A]">{c.label}</div>
+                    <div className="text-[11px] text-[#64748B] font-mono">
                       {c.auth_type} · {c.role_profile} · Expires {formatDateTime(c.expires_at)}
                     </div>
                   </div>
@@ -280,7 +293,7 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
                       loadAll();
                     }}
                     aria-label={`Delete credential ${c.label}`}
-                    className="p-1.5 text-slate-500 hover:text-red-400"
+                    className="p-1.5 text-[#94A3B8] hover:text-[#DC2626] hover:bg-[#FEF2F2] rounded-md"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
@@ -293,44 +306,48 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
 
       {/* RBAC & API Keys */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-[#0F172A] border border-slate-800 rounded-md p-5 space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-sm font-semibold text-slate-100">
-              <UserPlus className="w-4 h-4 text-blue-400" aria-hidden="true" />
-              <h2>Organization Team & RBAC</h2>
+        <div className="min-w-0 bg-[#FFFFFF] border border-[#E2E8F0] rounded-lg p-5 space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-sm font-semibold text-[#0F172A]">
+              <UserPlus className="w-4 h-4 text-[#2563EB]" aria-hidden="true" />
+              <h2>Organization Team &amp; RBAC</h2>
             </div>
             <button
               type="button"
               onClick={handleToggleMfa}
-              className="px-3 py-1 text-xs bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded text-slate-200"
+              className={`px-3 py-1 text-xs font-medium rounded-md border transition-colors ${
+                user.mfaEnabled
+                  ? 'bg-[#F0FDF4] border-[#BBF7D0] text-[#15803D]'
+                  : 'bg-[#F8FAFC] border-[#CBD5E1] text-[#475569] hover:text-[#0F172A]'
+              }`}
             >
               MFA: {user.mfaEnabled ? 'Enabled' : 'Disabled'}
             </button>
           </div>
 
-          <div className="divide-y divide-slate-800/80 border border-slate-800 rounded bg-[#090D16] text-xs">
+          <div className="divide-y divide-[#E2E8F0] border border-[#E2E8F0] rounded-md bg-[#F8FAFC] text-xs">
             {members.map((m) => (
               <div key={m.id} className="px-3.5 py-2.5 flex items-center justify-between">
                 <div>
-                  <div className="text-slate-200 font-medium">{m.full_name}</div>
-                  <div className="text-[11px] text-slate-500">{m.email}</div>
+                  <div className="text-[#0F172A] font-semibold">{m.full_name}</div>
+                  <div className="text-[11px] text-[#64748B]">{m.email}</div>
                 </div>
-                <span className="font-mono text-blue-400 uppercase text-[11px]">{m.role}</span>
+                <span className="font-mono font-semibold text-[#2563EB] uppercase text-[11px]">{m.role}</span>
               </div>
             ))}
           </div>
 
           {user.role === 'admin' && (
             <form onSubmit={handleAddMember} className="pt-2 space-y-2.5 text-xs">
-              <div className="font-medium text-slate-300">Provision Team Member</div>
-              <div className="grid grid-cols-2 gap-2.5">
+              <div className="font-semibold text-[#0F172A]">Provision Team Member</div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 <input
                   type="text"
                   required
                   value={memberName}
                   onChange={(e) => setMemberName(e.target.value)}
                   placeholder="Full Name"
-                  className="px-3 py-1.5 bg-[#090D16] border border-slate-700 rounded text-slate-100"
+                  className={inputClassName}
                 />
                 <input
                   type="email"
@@ -338,7 +355,7 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
                   value={memberEmail}
                   onChange={(e) => setMemberEmail(e.target.value)}
                   placeholder="Email"
-                  className="px-3 py-1.5 bg-[#090D16] border border-slate-700 rounded text-slate-100"
+                  className={inputClassName}
                 />
                 <input
                   type="password"
@@ -347,19 +364,22 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
                   value={memberPassword}
                   onChange={(e) => setMemberPassword(e.target.value)}
                   placeholder="Initial Password (8+ chars)"
-                  className="px-3 py-1.5 bg-[#090D16] border border-slate-700 rounded text-slate-100"
+                  className={inputClassName}
                 />
                 <select
                   value={memberRole}
                   onChange={(e) => setMemberRole(e.target.value as typeof memberRole)}
-                  className="px-3 py-1.5 bg-[#090D16] border border-slate-700 rounded text-slate-100"
+                  className={selectClassName}
                 >
                   <option value="analyst">Analyst</option>
                   <option value="viewer">Viewer</option>
                   <option value="admin">Admin</option>
                 </select>
               </div>
-              <button type="submit" className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded font-medium">
+              <button
+                type="submit"
+                className="px-3.5 py-2 bg-[#2563EB] hover:bg-[#1D4ED8] text-white rounded-md font-semibold shadow-xs"
+              >
                 Add Member
               </button>
             </form>
@@ -367,16 +387,16 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
         </div>
 
         {/* API Keys */}
-        <div className="bg-[#0F172A] border border-slate-800 rounded-md p-5 space-y-4">
-          <div className="flex items-center gap-2 text-sm font-semibold text-slate-100">
-            <KeyRound className="w-4 h-4 text-blue-400" aria-hidden="true" />
+        <div className="min-w-0 bg-[#FFFFFF] border border-[#E2E8F0] rounded-lg p-5 space-y-4">
+          <div className="flex items-center gap-2 text-sm font-semibold text-[#0F172A]">
+            <KeyRound className="w-4 h-4 text-[#2563EB]" aria-hidden="true" />
             <h2>Programmatic CI/CD API Keys</h2>
           </div>
 
           {newlyCreatedKey && (
-            <div className="p-3 bg-emerald-950/40 border border-emerald-700/50 rounded text-xs">
-              <div className="text-emerald-300 font-medium">Copy your new API key (shown once):</div>
-              <div className="mt-1 font-mono text-slate-100 break-all select-all">{newlyCreatedKey}</div>
+            <div className="p-3 bg-[#F0FDF4] border border-[#BBF7D0] rounded-md text-xs">
+              <div className="text-[#15803D] font-semibold">Copy your new API key (shown once):</div>
+              <div className="mt-1 font-mono text-[#0F172A] break-all select-all">{newlyCreatedKey}</div>
             </div>
           )}
 
@@ -388,23 +408,26 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
                 value={keyName}
                 onChange={(e) => setKeyName(e.target.value)}
                 placeholder="GitHub Actions Nightly Scanner"
-                className="flex-1 px-3 py-2 bg-[#090D16] border border-slate-700 rounded text-slate-100"
+                className={`${inputClassName} flex-1`}
               />
-              <button type="submit" className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded font-medium whitespace-nowrap">
+              <button
+                type="submit"
+                className="px-4 py-2 bg-[#2563EB] hover:bg-[#1D4ED8] text-white rounded-md font-semibold whitespace-nowrap shadow-xs"
+              >
                 Generate Key
               </button>
             </form>
           )}
 
-          <div className="divide-y divide-slate-800/80 border border-slate-800 rounded bg-[#090D16] text-xs">
+          <div className="divide-y divide-[#E2E8F0] border border-[#E2E8F0] rounded-md bg-[#F8FAFC] text-xs">
             {apiKeys.length === 0 ? (
-              <div className="p-4 text-slate-500">No API keys created yet.</div>
+              <div className="p-4 text-[#64748B]">No API keys created yet.</div>
             ) : (
               apiKeys.map((k) => (
                 <div key={k.id} className="px-3.5 py-2.5 flex items-center justify-between">
                   <div>
-                    <div className="text-slate-200 font-medium">{k.name}</div>
-                    <div className="text-[11px] font-mono text-slate-500">
+                    <div className="text-[#0F172A] font-semibold">{k.name}</div>
+                    <div className="text-[11px] font-mono text-[#64748B]">
                       {k.key_prefix}... · {k.role} · {k.revoked_at ? 'Revoked' : 'Active'}
                     </div>
                   </div>
@@ -415,7 +438,7 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
                         await apiRequest(`/api-keys/${k.id}`, { method: 'DELETE' });
                         loadAll();
                       }}
-                      className="text-xs text-red-400 hover:underline"
+                      className="text-xs font-medium text-[#DC2626] hover:underline"
                     >
                       Revoke
                     </button>
@@ -428,28 +451,30 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
       </div>
 
       {/* Immutable Audit Trail */}
-      <div className="bg-[#0F172A] border border-slate-800 rounded-md overflow-hidden">
-        <div className="px-5 py-3.5 border-b border-slate-800 flex items-center gap-2 text-sm font-semibold text-slate-100">
-          <Shield className="w-4 h-4 text-blue-400" aria-hidden="true" />
+      <div className="bg-[#FFFFFF] border border-[#E2E8F0] rounded-lg overflow-hidden">
+        <div className="px-5 py-3.5 border-b border-[#E2E8F0] flex items-center gap-2 text-sm font-semibold text-[#0F172A]">
+          <Shield className="w-4 h-4 text-[#2563EB]" aria-hidden="true" />
           <h2>Immutable Security Audit Log</h2>
         </div>
         <div className="overflow-x-auto max-h-80">
           <table className="w-full text-left border-collapse text-xs">
-            <thead className="sticky top-0 bg-[#0B111E] border-b border-slate-800 text-slate-400">
+            <thead className="sticky top-0 bg-[#F8FAFC] border-b border-[#E2E8F0] text-[11px] uppercase tracking-wider text-[#64748B]">
               <tr>
-                <th className="py-2.5 px-4 font-medium">Timestamp</th>
-                <th className="py-2.5 px-4 font-medium">Actor</th>
-                <th className="py-2.5 px-4 font-medium">Action</th>
-                <th className="py-2.5 px-4 font-medium">Target / Details</th>
+                <th className="py-2.5 px-4 font-semibold">Timestamp</th>
+                <th className="py-2.5 px-4 font-semibold">Actor</th>
+                <th className="py-2.5 px-4 font-semibold">Action</th>
+                <th className="py-2.5 px-4 font-semibold">Target / Details</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-800/80">
+            <tbody className="divide-y divide-[#E2E8F0]">
               {auditLogs.map((l) => (
-                <tr key={l.id}>
-                  <td className="py-2 px-4 font-mono tabular-nums text-slate-400 whitespace-nowrap">{formatDateTime(l.created_at)}</td>
-                  <td className="py-2 px-4 text-slate-300 whitespace-nowrap">{l.user_email || 'system'}</td>
-                  <td className="py-2 px-4 font-mono text-blue-300 whitespace-nowrap">{l.action}</td>
-                  <td className="py-2 px-4 font-mono text-[11px] text-slate-400 max-w-md truncate">{l.details_json}</td>
+                <tr key={l.id} className="hover:bg-[#F8FAFC]">
+                  <td className="py-2 px-4 font-mono tabular-nums text-[#64748B] whitespace-nowrap">
+                    {formatDateTime(l.created_at)}
+                  </td>
+                  <td className="py-2 px-4 text-[#334155] whitespace-nowrap">{l.user_email || 'system'}</td>
+                  <td className="py-2 px-4 font-mono font-medium text-[#2563EB] whitespace-nowrap">{l.action}</td>
+                  <td className="py-2 px-4 font-mono text-[11px] text-[#475569] max-w-md truncate">{l.details_json}</td>
                 </tr>
               ))}
             </tbody>
