@@ -4,7 +4,7 @@ import type { ModuleExecutionResult, ScannerModule, ScanContext } from '../types
 interface ParsedPackage {
   name: string;
   version: string;
-  ecosystem: 'npm' | 'PyPI' | 'Packagist' | 'RubyGems';
+  ecosystem: 'npm' | 'PyPI' | 'Packagist' | 'RubyGems' | 'Go' | 'crates.io' | 'Maven';
 }
 
 export function parseDependencyManifest(filename: string, raw: string): ParsedPackage[] {
@@ -63,6 +63,27 @@ export function parseDependencyManifest(filename: string, raw: string): ParsedPa
       const m = line.match(/^\s{4}([A-Za-z0-9_-]+)\s+\(([^)]+)\)/);
       if (m) pkgs.push({ name: m[1], version: m[2], ecosystem: 'RubyGems' });
     }
+  } else if (lower.endsWith('go.mod')) {
+    const lines = raw.split(/\r?\n/);
+    for (const line of lines) {
+      const m = line.match(/^\s*(?:require\s+)?([A-Za-z0-9._/-]+)\s+v([0-9]+\.[0-9]+\.[0-9]+[^\s]*)/);
+      if (m) pkgs.push({ name: m[1], version: m[2], ecosystem: 'Go' });
+    }
+  } else if (lower.endsWith('cargo.toml')) {
+    const matches = raw.matchAll(/^([A-Za-z0-9_-]+)\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"/gm);
+    for (const m of matches) {
+      pkgs.push({ name: m[1], version: m[2], ecosystem: 'crates.io' });
+    }
+  } else if (lower.endsWith('pom.xml')) {
+    const depBlocks = raw.matchAll(/<dependency>([\s\S]*?)<\/dependency>/gi);
+    for (const block of depBlocks) {
+      const g = block[1].match(/<groupId>([^<]+)<\/groupId>/i)?.[1]?.trim();
+      const a = block[1].match(/<artifactId>([^<]+)<\/artifactId>/i)?.[1]?.trim();
+      const v = block[1].match(/<version>([0-9][^<]+)<\/version>/i)?.[1]?.trim();
+      if (g && a && v) {
+        pkgs.push({ name: `${g}:${a}`, version: v, ecosystem: 'Maven' });
+      }
+    }
   } else if (lower.endsWith('yarn.lock') || lower.endsWith('pnpm-lock.yaml')) {
     const matches = raw.matchAll(/(?:^|\n)\s*["']?(@?[A-Za-z0-9._/-]+)@[^:\n]+:\s*\n\s+version[:\s]+["']?([0-9]+\.[0-9]+\.[0-9]+[^"'\s]*)/g);
     for (const m of matches) {
@@ -70,7 +91,7 @@ export function parseDependencyManifest(filename: string, raw: string): ParsedPa
     }
   }
 
-  return pkgs.slice(0, 60);
+  return pkgs.slice(0, 300);
 }
 
 interface OsvVuln {
@@ -83,7 +104,6 @@ interface OsvVuln {
   references?: Array<{ url?: string }>;
 }
 
-// Minimal deterministic offline fallback ONLY used if live api.osv.dev network request fails
 const FALLBACK_ADVISORIES: Array<{
   ecosystem: string;
   name: string;
@@ -112,26 +132,26 @@ function compareSemver(a: string, b: string): number {
 export const dependencyScaModule: ScannerModule = {
   id: 'dependency-sca',
   name: 'Software Composition Analysis (OSV.dev)',
-  version: '1.2.0',
+  version: '1.4.0',
   category: 'Dependency & Supply Chain Security',
-  description: 'Parses dependency manifests/lockfiles and queries OSV vulnerability database for known CVEs.',
+  description: 'Parses dependency manifests/lockfiles (npm, PyPI, Go, Rust, Maven, PHP, Ruby) and queries OSV.dev in batches for known CVEs.',
   supportedProfiles: ['comprehensive', 'custom', 'standard'],
-  defaultTimeoutMs: 15000,
+  defaultTimeoutMs: 30000,
 
   async execute(ctx: ScanContext): Promise<ModuleExecutionResult> {
     const checks: ModuleExecutionResult['checks'] = [];
     const findings: ModuleExecutionResult['findings'] = [];
     const logs: ModuleExecutionResult['logs'] = [];
 
-    if (!ctx.scaManifestRaw || !ctx.scaManifestName) {
+    if (!ctx.scaManifestRaw || !ctx.scaManifestName || !ctx.scaManifestRaw.trim()) {
       checks.push({
         checkKey: 'sca.manifest_analysis',
         title: 'Dependency Vulnerability Analysis (SCA)',
         category: 'Dependency Security',
         status: 'not_performed',
         observedValue: 'No dependency manifest or lockfile supplied',
-        expectedValue: 'package.json, package-lock.json, requirements.txt, pyproject.toml, composer.lock, or Gemfile.lock',
-        explanation: 'Supply a package manifest in Scan Configuration to execute live OSV CVE matching.',
+        expectedValue: 'package.json, package-lock.json, requirements.txt, pyproject.toml, go.mod, Cargo.toml, pom.xml, composer.lock, or Gemfile.lock',
+        explanation: 'Supply a package manifest in Scan Configuration to execute live OSV CVE matching. Never reported as passed without input.',
         remediation: null,
         cweId: null,
         owaspCategory: 'A06:2021',
@@ -178,82 +198,90 @@ export const dependencyScaModule: ScannerModule = {
     let vulnHits = 0;
 
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 8000);
-      const osvRes = await fetch('https://api.osv.dev/v1/querybatch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          queries: packages.map((p) => ({
-            package: { name: p.name, ecosystem: p.ecosystem },
-            version: p.version,
-          })),
-        }),
-        signal: controller.signal,
-      });
-      clearTimeout(timer);
+      const allBatchResults: Array<{ pkg: ParsedPackage; vulns: Array<{ id: string }> }> = [];
+      for (let offset = 0; offset < packages.length; offset += 100) {
+        const chunk = packages.slice(offset, offset + 100);
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 8000);
+        const osvRes = await fetch('https://api.osv.dev/v1/querybatch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            queries: chunk.map((p) => ({
+              package: { name: p.name, ecosystem: p.ecosystem },
+              version: p.version,
+            })),
+          }),
+          signal: controller.signal,
+        });
+        clearTimeout(timer);
 
-      if (osvRes.ok) {
+        if (!osvRes.ok) {
+          throw new Error(`OSV querybatch HTTP ${osvRes.status}`);
+        }
         usedLiveOsv = true;
         const data = (await osvRes.json()) as { results?: Array<{ vulns?: Array<{ id: string }> }> };
         const results = data.results || [];
+        for (let i = 0; i < chunk.length; i++) {
+          allBatchResults.push({ pkg: chunk[i], vulns: results[i]?.vulns || [] });
+        }
+      }
 
-        // Fetch detail for up to 12 discovered vulns
-        for (let i = 0; i < results.length && vulnHits < 12; i++) {
-          const pkg = packages[i];
-          const vulns = results[i]?.vulns || [];
-          for (const v of vulns.slice(0, 3)) {
-            if (vulnHits >= 12) break;
-            vulnHits += 1;
-            let detail: OsvVuln = { id: v.id };
-            try {
-              const dRes = await fetch(`https://api.osv.dev/v1/vulns/${encodeURIComponent(v.id)}`);
-              if (dRes.ok) detail = (await dRes.json()) as OsvVuln;
-            } catch {
-              // Use minimal id if detail fails
-            }
-            const cve = (detail.aliases || []).find((a) => a.startsWith('CVE-')) || null;
-            const fixed = detail.affected?.[0]?.ranges?.[0]?.events?.find((e) => e.fixed)?.fixed || 'latest patched release';
-            const sev: 'critical' | 'high' | 'medium' =
-              /critical|rce|remote code/i.test(`${detail.summary || ''} ${detail.details || ''}`)
-                ? 'critical'
-                : 'high';
-
-            findings.push({
-              ruleId: `SCA_${pkg.name.toUpperCase()}_${v.id}`,
-              title: `Vulnerable Dependency: ${pkg.name}@${pkg.version} (${cve || v.id})`,
-              category: 'Dependency & Supply Chain Security',
-              description: detail.summary || `Known OSV vulnerability ${v.id} affects ${pkg.name} ${pkg.version}.`,
-              technicalExplanation: `Matched via live OSV.dev API for ${pkg.ecosystem} package ${pkg.name}==${pkg.version}. Advisory: ${v.id}${cve ? ` (${cve})` : ''}.`,
-              affectedUrl: `manifest://${ctx.scaManifestName}#${pkg.name}@${pkg.version}`,
-              httpMethod: null,
-              parameterName: pkg.name,
-              confidence: 'high',
-              severity: sev,
-              cvssVersion: null,
-              cvssScore: null,
-              cvssVector: null,
-              cvssRationale: 'Reported via OSV advisory metadata; review exact application reachability for contextual CVSS.',
-              cweId: 'CWE-1395',
-              cveId: cve || v.id,
-              owaspCategory: 'A06:2021',
-              owaspApiCategory: null,
-              businessImpact: 'Known flaws in third-party dependencies can enable prototype pollution, injection, or unauthorized access.',
-              exploitationPrerequisites: 'Vulnerable code path reachable in dependency.',
-              remediationInstructions: `Upgrade ${pkg.name} in ${ctx.scaManifestName} to >= ${fixed}.`,
-              references: [
-                `https://osv.dev/vulnerability/${v.id}`,
-                ...((detail.references || []).map((r) => r.url).filter(Boolean).slice(0, 2) as string[]),
-              ],
-              evidence: [
-                {
-                  evidenceType: 'dependency_advisory',
-                  summary: `OSV.dev live match for ${pkg.name}@${pkg.version}`,
-                  rawExcerpt: `Package: ${pkg.name}@${pkg.version} (${pkg.ecosystem})\nAdvisory: ${v.id} / ${cve || 'no CVE alias'}\nFixed in: ${fixed}`,
-                },
-              ],
-            });
+      for (const entry of allBatchResults) {
+        if (vulnHits >= 25) break;
+        const pkg = entry.pkg;
+        for (const v of entry.vulns.slice(0, 3)) {
+          if (vulnHits >= 25) break;
+          vulnHits += 1;
+          let detail: OsvVuln = { id: v.id };
+          try {
+            const dRes = await fetch(`https://api.osv.dev/v1/vulns/${encodeURIComponent(v.id)}`);
+            if (dRes.ok) detail = (await dRes.json()) as OsvVuln;
+          } catch {
+            // Use minimal id if detail fails
           }
+          const cve = (detail.aliases || []).find((a) => a.startsWith('CVE-')) || null;
+          const fixed = detail.affected?.[0]?.ranges?.[0]?.events?.find((e) => e.fixed)?.fixed || 'latest patched release';
+          const sev: 'critical' | 'high' | 'medium' =
+            /critical|rce|remote code/i.test(`${detail.summary || ''} ${detail.details || ''}`)
+              ? 'critical'
+              : 'high';
+
+          findings.push({
+            ruleId: `SCA_${pkg.name.toUpperCase()}_${v.id}`,
+            title: `Vulnerable Dependency: ${pkg.name}@${pkg.version} (${cve || v.id})`,
+            category: 'Dependency & Supply Chain Security',
+            description: detail.summary || `Known OSV vulnerability ${v.id} affects ${pkg.name} ${pkg.version}.`,
+            technicalExplanation: `Matched via live OSV.dev API for ${pkg.ecosystem} package ${pkg.name}==${pkg.version}. Advisory: ${v.id}${cve ? ` (${cve})` : ''}.`,
+            detectionTechnique: 'Live OSV.dev querybatch CVE advisory lookup',
+            affectedUrl: `manifest://${ctx.scaManifestName}#${pkg.name}@${pkg.version}`,
+            httpMethod: null,
+            parameterName: pkg.name,
+            confidence: 'high',
+            severity: sev,
+            cvssVersion: null,
+            cvssScore: null,
+            cvssVector: null,
+            cvssRationale: 'Reported via OSV advisory metadata; review exact application reachability for contextual CVSS.',
+            cweId: 'CWE-1395',
+            cveId: cve || v.id,
+            owaspCategory: 'A06:2021',
+            owaspApiCategory: null,
+            businessImpact: 'Known flaws in third-party dependencies can enable prototype pollution, injection, or unauthorized access.',
+            exploitationPrerequisites: 'Vulnerable code path reachable in dependency.',
+            remediationInstructions: `Upgrade ${pkg.name} in ${ctx.scaManifestName} to >= ${fixed}.`,
+            references: [
+              `https://osv.dev/vulnerability/${v.id}`,
+              ...((detail.references || []).map((r) => r.url).filter(Boolean).slice(0, 2) as string[]),
+            ],
+            evidence: [
+              {
+                evidenceType: 'dependency_advisory',
+                summary: `OSV.dev live match for ${pkg.name}@${pkg.version}`,
+                rawExcerpt: `Package: ${pkg.name}@${pkg.version} (${pkg.ecosystem})\nAdvisory: ${v.id} / ${cve || 'no CVE alias'}\nFixed in: ${fixed}`,
+              },
+            ],
+          });
         }
       }
     } catch {
@@ -276,6 +304,7 @@ export const dependencyScaModule: ScannerModule = {
               category: 'Dependency & Supply Chain Security',
               description: adv.summary,
               technicalExplanation: `${pkg.name}@${pkg.version} is below patched version ${adv.affectedBelow}.`,
+              detectionTechnique: 'Offline fallback dependency advisory match (OSV.dev unreachable)',
               affectedUrl: `manifest://${ctx.scaManifestName}#${pkg.name}@${pkg.version}`,
               httpMethod: null,
               parameterName: pkg.name,

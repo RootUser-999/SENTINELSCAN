@@ -1,4 +1,5 @@
 import { evaluateCvss4 } from '../../intelligence/cvss4.ts';
+import { crawlTargetSurface } from '../crawler.ts';
 import type { ModuleExecutionResult, ScannerModule, ScanContext } from '../types.ts';
 
 const SENSITIVE_PROBE_PATHS = [
@@ -6,9 +7,13 @@ const SENSITIVE_PROBE_PATHS = [
   { path: '/.well-known/security.txt', label: 'security.txt', sensitive: false },
   { path: '/.env', label: 'Environment file (.env)', sensitive: true, sig: /(APP_KEY|DB_HOST|DB_PASSWORD|AWS_SECRET|API_KEY|APP_ENV)=/i },
   { path: '/.git/HEAD', label: 'Git repository metadata (.git/HEAD)', sensitive: true, sig: /^ref:\s+refs\//i },
+  { path: '/.git/config', label: 'Git repository configuration (.git/config)', sensitive: true, sig: /\[core\]|\[remote\s+"/i },
+  { path: '/config.json', label: 'Application config.json', sensitive: true, sig: /"(?:db|database|secret|apiKey|jwtSecret|password)"/i },
+  { path: '/actuator/health', label: 'Spring Boot Actuator Health Endpoint', sensitive: true, sig: /"status"\s*:\s*"(?:UP|DOWN)"/i },
   { path: '/phpinfo.php', label: 'PHPInfo diagnostic page', sensitive: true, sig: /phpinfo\(\)|PHP Version/i },
   { path: '/server-status', label: 'Apache server-status', sensitive: true, sig: /Apache Server Status/i },
   { path: '/admin/', label: 'Exposed Admin Directory', sensitive: true, sig: /Index of \//i },
+  { path: '/uploads/', label: 'Exposed Uploads Directory Listing', sensitive: true, sig: /Index of \/uploads/i },
 ];
 
 const VERBOSE_ERROR_PATTERNS = [
@@ -23,11 +28,12 @@ const VERBOSE_ERROR_PATTERNS = [
 export const surfaceExposureModule: ScannerModule = {
   id: 'surface-discovery-exposure',
   name: 'Surface Discovery & Misconfiguration Scanner',
-  version: '1.3.0',
+  version: '2.0.0',
   category: 'Security Misconfiguration & Surface Discovery',
-  description: 'Performs rate-limited in-scope discovery, checks exposed sensitive files, directory listings, HTTP OPTIONS methods, mixed content, and DOM XSS/SRI indicators.',
+  description:
+    'Performs controlled recursive crawling (links, forms, parameters, JS bundles), checks exposed sensitive files, directory listings, HTTP OPTIONS methods, mixed content, and DOM XSS/verbose error indicators.',
   supportedProfiles: ['quick', 'standard', 'comprehensive', 'custom'],
-  defaultTimeoutMs: 15000,
+  defaultTimeoutMs: 45000,
 
   async execute(ctx: ScanContext): Promise<ModuleExecutionResult> {
     const checks: ModuleExecutionResult['checks'] = [];
@@ -36,9 +42,10 @@ export const surfaceExposureModule: ScannerModule = {
     const logs: ModuleExecutionResult['logs'] = [];
 
     const baseRes = ctx.sharedState.homepageResponse || (await ctx.httpFetch(ctx.targetUrl));
+    ctx.sharedState.homepageResponse = baseRes;
     const origin = new URL(baseRes.finalUrl).origin;
 
-    // 1. HTML DOM passive inspection (mixed content, external scripts without SRI, unsafe DOM sink patterns)
+    // 1. HTML DOM passive inspection (mixed content, DOM sink patterns)
     const html = baseRes.bodyText || '';
     const isHttps = origin.startsWith('https://');
     const mixedContentMatches = isHttps ? html.match(/(?:src|href|action)=["']http:\/\/[^"']+["']/gi) || [] : [];
@@ -74,6 +81,7 @@ export const surfaceExposureModule: ScannerModule = {
         category: 'Data Protection & Encryption',
         description: 'An HTTPS page loads or links to resources over unencrypted HTTP.',
         technicalExplanation: `Detected HTML reference(s): ${mixedContentMatches.slice(0, 3).join(', ')}`,
+        detectionTechnique: 'HTML subresource protocol inspection (http:// references on https:// origin)',
         affectedUrl: baseRes.finalUrl,
         httpMethod: 'GET',
         parameterName: null,
@@ -128,6 +136,7 @@ export const surfaceExposureModule: ScannerModule = {
         category: 'Cross-Site Scripting (XSS)',
         description: 'Client-side script passes URL query/fragment data directly into an unsafe HTML sink (innerHTML).',
         technicalExplanation: `Matched inline script pattern on ${baseRes.finalUrl}: ${domSinkMatch[0].slice(0, 180)}`,
+        detectionTechnique: 'Passive inline script DOM source-to-sink inspection',
         affectedUrl: baseRes.finalUrl,
         httpMethod: 'GET',
         parameterName: 'URL query/fragment',
@@ -161,7 +170,7 @@ export const surfaceExposureModule: ScannerModule = {
         status: 'passed',
         observedValue: 'No obvious URL-source-to-innerHTML pattern in inline HTML',
         expectedValue: 'No unguarded DOM XSS sinks',
-        explanation: 'Passive inspection of homepage inline scripts did not detect direct location-to-innerHTML flows (bundled JS files require SAST).',
+        explanation: 'Passive inspection of homepage inline scripts did not detect direct location-to-innerHTML flows.',
         remediation: null,
         cweId: 'CWE-79',
         owaspCategory: 'A03:2021',
@@ -197,6 +206,7 @@ export const surfaceExposureModule: ScannerModule = {
           category: 'Security Misconfiguration',
           description: 'The server advertises support for the HTTP TRACE diagnostic method.',
           technicalExplanation: `OPTIONS ${baseRes.finalUrl} returned Allow: ${allow}`,
+          detectionTechnique: 'HTTP OPTIONS Allow header inspection',
           affectedUrl: baseRes.finalUrl,
           httpMethod: 'OPTIONS',
           parameterName: null,
@@ -254,12 +264,12 @@ export const surfaceExposureModule: ScannerModule = {
 
         if (probe.sensitive && probeRes.status === 200 && probe.sig && probe.sig.test(probeRes.bodyText)) {
           exposedFiles.push(`${probe.path} (HTTP 200)`);
-          const isEnvOrGit = probe.path === '/.env' || probe.path === '/.git/HEAD';
+          const isHighSensitivity = probe.path === '/.env' || probe.path.startsWith('/.git');
           const cvss = evaluateCvss4(
-            isEnvOrGit
+            isHighSensitivity
               ? { AV: 'N', AC: 'L', AT: 'N', PR: 'N', UI: 'N', VC: 'H', VI: 'N', VA: 'N', SC: 'H', SI: 'N', SA: 'N' }
               : { AV: 'N', AC: 'L', AT: 'N', PR: 'N', UI: 'N', VC: 'L', VI: 'N', VA: 'N', SC: 'N', SI: 'N', SA: 'N' },
-            isEnvOrGit ? 'critical' : 'medium',
+            isHighSensitivity ? 'critical' : 'medium',
             `Verified public HTTP 200 exposure matching ${probe.label} signature.`
           );
 
@@ -269,6 +279,7 @@ export const surfaceExposureModule: ScannerModule = {
             category: 'Security Misconfiguration',
             description: `Sensitive resource ${probe.path} is publicly accessible without authentication.`,
             technicalExplanation: `GET ${target} returned HTTP 200 and matched expected signature for ${probe.label}.`,
+            detectionTechnique: 'Signature-verified sensitive path probe (no blind HTTP 200 false positives)',
             affectedUrl: target,
             httpMethod: 'GET',
             parameterName: null,
@@ -278,11 +289,11 @@ export const surfaceExposureModule: ScannerModule = {
             cvssScore: cvss.score,
             cvssVector: cvss.vector,
             cvssRationale: cvss.rationale,
-            cweId: probe.path === '/admin/' ? 'CWE-548' : 'CWE-538',
+            cweId: probe.path.endsWith('/') ? 'CWE-548' : 'CWE-538',
             cveId: null,
             owaspCategory: 'A05:2021',
             owaspApiCategory: null,
-            businessImpact: isEnvOrGit
+            businessImpact: isHighSensitivity
               ? 'Exposure of environment files or git metadata frequently leaks database credentials, API tokens, and proprietary source code.'
               : 'Directory listing or diagnostic exposure reveals internal file paths and backup artifacts.',
             exploitationPrerequisites: 'Unauthenticated HTTP GET access.',
@@ -307,7 +318,7 @@ export const surfaceExposureModule: ScannerModule = {
       title: 'Publicly Exposed Sensitive Files & Directory Listing',
       category: 'Security Misconfiguration',
       status: exposedFiles.length > 0 ? 'failed' : 'passed',
-      observedValue: exposedFiles.length > 0 ? exposedFiles.join(', ') : 'No sensitive files (.env, .git/HEAD, directory indexes) exposed',
+      observedValue: exposedFiles.length > 0 ? exposedFiles.join(', ') : 'No sensitive files (.env, .git, config, directory indexes) exposed',
       expectedValue: '403/404 on internal config, backup, and VCS paths',
       explanation:
         exposedFiles.length > 0
@@ -333,97 +344,88 @@ export const surfaceExposureModule: ScannerModule = {
       owaspCategory: null,
     });
 
-    // 5. Light in-scope link crawling (standard / comprehensive / custom)
-    if (ctx.profile !== 'quick') {
-      const linkRegex = /href=["'](\/[^"'#?]+(?:\?[^"']*)?)["']/gi;
-      const discovered = new Set<string>();
-      let match: RegExpExecArray | null;
-      while ((match = linkRegex.exec(html)) !== null && discovered.size < 8) {
-        const candidatePath = match[1];
-        if (!ctx.scopeExcludePaths.some((ex) => ex && candidatePath.startsWith(ex))) {
-          discovered.add(`${origin}${candidatePath}`);
-        }
-      }
-
-      let verboseErrorsFound = 0;
-      for (const crawledUrl of discovered) {
-        if (ctx.isCancelled()) break;
-        if (ctx.sharedState.discoveredUrls.has(crawledUrl)) continue;
-        ctx.sharedState.discoveredUrls.add(crawledUrl);
-        try {
-          const pageRes = await ctx.httpFetch(crawledUrl);
-          const u = new URL(crawledUrl);
-          endpoints.push({
-            url: crawledUrl,
-            path: u.pathname,
-            method: 'GET',
-            source: 'crawl',
-            authRequired: pageRes.status === 401 || pageRes.status === 403 ? 'required' : 'none_detected',
-            statusCode: pageRes.status,
-            contentType: pageRes.headers['content-type'] || null,
-            parameters: Array.from(u.searchParams.keys()),
-            notes: 'In-scope crawl discovery',
-          });
-
-          for (const pat of VERBOSE_ERROR_PATTERNS) {
-            const errMatch = pageRes.bodyText.match(pat);
-            if (errMatch) {
-              verboseErrorsFound += 1;
-              findings.push({
-                ruleId: 'INFO_VERBOSE_ERROR_STACK',
-                title: 'Verbose Application Error / Stack Trace Disclosure',
-                category: 'Security Misconfiguration',
-                description: 'Application response contains database or runtime error diagnostics.',
-                technicalExplanation: `Crawling ${crawledUrl} revealed error signature "${errMatch[0]}".`,
-                affectedUrl: crawledUrl,
-                httpMethod: 'GET',
-                parameterName: null,
-                confidence: 'high',
-                severity: 'medium',
-                cvssVersion: null,
-                cvssScore: null,
-                cvssVector: null,
-                cvssRationale: 'Error disclosure reveals internal architecture; CVSS depends on whether sensitive secrets or SQL queries appear.',
-                cweId: 'CWE-209',
-                cveId: null,
-                owaspCategory: 'A05:2021',
-                owaspApiCategory: null,
-                businessImpact: 'Exposes internal SQL dialects, file paths, and framework stack traces.',
-                exploitationPrerequisites: 'Standard GET navigation.',
-                remediationInstructions: 'Disable debug mode in production and return generic error pages while logging details server-side.',
-                references: ['https://cwe.mitre.org/data/definitions/209.html'],
-                evidence: [
-                  {
-                    evidenceType: 'http_response',
-                    summary: 'Matched verbose error pattern',
-                    rawExcerpt: errMatch[0],
-                  },
-                ],
-              });
-              break;
-            }
-          }
-        } catch {
-          // Skip unreachable crawled path
-        }
-      }
-
-      checks.push({
-        checkKey: 'surface.verbose_errors',
-        title: 'Verbose Error & Debug Trace Disclosure',
-        category: 'Security Misconfiguration',
-        status: verboseErrorsFound > 0 ? 'failed' : 'passed',
-        observedValue: `${verboseErrorsFound} verbose error pattern(s) across ${ctx.sharedState.discoveredUrls.size} crawled URL(s)`,
-        expectedValue: 'Generic error messages without stack traces or SQL errors',
-        explanation:
-          verboseErrorsFound > 0
-            ? `Detected ${verboseErrorsFound} response(s) containing debug/SQL error text.`
-            : 'No verbose stack traces or SQL error disclosures observed across crawled pages.',
-        remediation: verboseErrorsFound > 0 ? 'Set APP_DEBUG=false / NODE_ENV=production and use sanitized error handlers.' : null,
-        cweId: 'CWE-209',
-        owaspCategory: 'A05:2021',
-      });
+    // 5. Controlled recursive in-scope crawl across links, forms, params, JS bundles
+    const crawl = await crawlTargetSurface(ctx);
+    for (const ep of crawl.endpoints) {
+      endpoints.push(ep);
     }
+
+    logs.push({
+      level: 'info',
+      message: `Discovered ${crawl.stats.pagesCrawled} page(s), ${crawl.stats.formsFound} form(s), ${crawl.stats.paramsFound} parameter(s), ${crawl.stats.jsFilesFetched} JS bundle(s), ${crawl.stats.apiRoutesFromJs} JS API route(s).`,
+    });
+
+    let verboseErrorsFound = 0;
+    for (const page of crawl.pages) {
+      for (const pat of VERBOSE_ERROR_PATTERNS) {
+        const errMatch = page.bodyText.match(pat);
+        if (errMatch) {
+          verboseErrorsFound += 1;
+          findings.push({
+            ruleId: `INFO_VERBOSE_ERROR_STACK_${page.path.replace(/[^A-Za-z0-9]/g, '_').toUpperCase()}`,
+            title: `Verbose Application Error / Stack Trace Disclosure (${page.path})`,
+            category: 'Security Misconfiguration',
+            description: 'Application response contains database or runtime error diagnostics.',
+            technicalExplanation: `Crawling ${page.finalUrl} revealed error signature "${errMatch[0]}".`,
+            detectionTechnique: 'Recursive crawl response error signature matching',
+            affectedUrl: page.finalUrl,
+            httpMethod: 'GET',
+            parameterName: null,
+            confidence: 'high',
+            severity: 'medium',
+            cvssVersion: null,
+            cvssScore: null,
+            cvssVector: null,
+            cvssRationale: 'Error disclosure reveals internal architecture; CVSS depends on whether sensitive secrets or SQL queries appear.',
+            cweId: 'CWE-209',
+            cveId: null,
+            owaspCategory: 'A05:2021',
+            owaspApiCategory: null,
+            businessImpact: 'Exposes internal SQL dialects, file paths, and framework stack traces.',
+            exploitationPrerequisites: 'Standard GET navigation.',
+            remediationInstructions: 'Disable debug mode in production and return generic error pages while logging details server-side.',
+            references: ['https://cwe.mitre.org/data/definitions/209.html'],
+            evidence: [
+              {
+                evidenceType: 'http_response',
+                summary: 'Matched verbose error pattern',
+                rawExcerpt: errMatch[0],
+              },
+            ],
+          });
+          break;
+        }
+      }
+    }
+
+    checks.push({
+      checkKey: 'surface.crawl_coverage',
+      title: 'Recursive Attack Surface Crawl Coverage',
+      category: 'Surface Discovery',
+      status: 'informational',
+      observedValue: `${crawl.stats.pagesCrawled} page(s) (depth ${crawl.stats.maxDepthReached}), ${crawl.stats.formsFound} form(s), ${crawl.stats.paramsFound} param(s), ${crawl.stats.jsFilesFetched} JS file(s)`,
+      expectedValue: 'In-scope pages, forms, parameters, and scripts inventoried within safety budget',
+      explanation: `Crawler discovered ${crawl.endpoints.length} endpoint record(s) and ${crawl.loginPages.length} authentication workflow(s) (${crawl.stats.stoppedReason}).`,
+      remediation: null,
+      cweId: null,
+      owaspCategory: null,
+    });
+
+    checks.push({
+      checkKey: 'surface.verbose_errors',
+      title: 'Verbose Error & Debug Trace Disclosure',
+      category: 'Security Misconfiguration',
+      status: verboseErrorsFound > 0 ? 'failed' : 'passed',
+      observedValue: `${verboseErrorsFound} verbose error pattern(s) across ${crawl.pages.length} crawled page(s)`,
+      expectedValue: 'Generic error messages without stack traces or SQL errors',
+      explanation:
+        verboseErrorsFound > 0
+          ? `Detected ${verboseErrorsFound} response(s) containing debug/SQL error text.`
+          : 'No verbose stack traces or SQL error disclosures observed across crawled pages.',
+      remediation: verboseErrorsFound > 0 ? 'Set APP_DEBUG=false / NODE_ENV=production and use sanitized error handlers.' : null,
+      cweId: 'CWE-209',
+      owaspCategory: 'A05:2021',
+    });
 
     return { checks, findings, endpoints, logs };
   },

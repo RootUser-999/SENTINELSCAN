@@ -1,9 +1,10 @@
 import crypto from 'node:crypto';
+import type { DatabaseSync } from 'node:sqlite';
 import { getDb } from '../db/database.ts';
 import type { ScanProfile } from '../db/types.ts';
 import { generateComplianceMappingsForScan } from '../compliance/mapper.ts';
 import { upsertScanFindings } from '../intelligence/findingManager.ts';
-import { calculatePostureScore } from '../intelligence/posture.ts';
+import { reconcileScanCountersInDb } from '../intelligence/reconcile.ts';
 import { createNotification, writeAuditLog } from '../security/audit.ts';
 import { decryptSecret } from '../security/cryptoVault.ts';
 import { SsrfSafeHttpClient } from './httpClient.ts';
@@ -12,17 +13,19 @@ import { authenticatedAccessModule } from './modules/authenticatedAccess.ts';
 import { dependencyScaModule } from './modules/dependencySca.ts';
 import { dnsInfrastructureModule } from './modules/dnsInfrastructure.ts';
 import { httpTlsTransportModule } from './modules/httpTlsTransport.ts';
+import { owaspActiveProbesModule } from './modules/owaspActiveProbes.ts';
 import { securityHeadersModule } from './modules/securityHeaders.ts';
 import { sessionAuthCookiesModule } from './modules/sessionAuthCookies.ts';
 import { staticCodeSastModule } from './modules/staticCodeSast.ts';
 import { surfaceExposureModule } from './modules/surfaceExposure.ts';
-import type { ScanContext, ScannerModule } from './types.ts';
+import type { SastSourceFile, ScanContext, ScannerModule } from './types.ts';
 
 export const SCANNER_MODULES: ScannerModule[] = [
   httpTlsTransportModule,
   securityHeadersModule,
   dnsInfrastructureModule,
   surfaceExposureModule,
+  owaspActiveProbesModule,
   sessionAuthCookiesModule,
   apiSecurityModule,
   dependencyScaModule,
@@ -104,15 +107,106 @@ function appendScanLog(
   ).run(crypto.randomUUID(), scanId, new Date().toISOString(), level, moduleId, message);
 }
 
+async function resolveCredentialAuthHeaders(
+  db: DatabaseSync,
+  scanId: string,
+  credentialId: string | null | undefined,
+  organizationId: string,
+  httpClient: SsrfSafeHttpClient,
+  targetOrigin: string,
+  secretValuesToRedact: string[]
+): Promise<{ headers: Record<string, string>; roleProfile: string | null }> {
+  const headers: Record<string, string> = {};
+  if (!credentialId) return { headers, roleProfile: null };
+
+  const credRow = db
+    .prepare('SELECT * FROM scan_credentials WHERE id = ? AND organization_id = ?')
+    .get(String(credentialId), organizationId) as Record<string, unknown> | undefined;
+
+  if (!credRow) return { headers, roleProfile: null };
+
+  if (new Date(String(credRow.expires_at)).getTime() < Date.now()) {
+    appendScanLog(scanId, 'warn', null, `Credential "${credRow.label}" has expired; skipping.`);
+    return { headers, roleProfile: null };
+  }
+
+  const plain = decryptSecret({
+    ciphertextHex: String(credRow.encrypted_secret_blob),
+    ivHex: String(credRow.iv_hex),
+    authTagHex: String(credRow.auth_tag_hex),
+  });
+
+  if (!plain) {
+    appendScanLog(scanId, 'warn', null, `Credential "${credRow.label}" could not be decrypted; re-save credential.`);
+    return { headers, roleProfile: null };
+  }
+
+  secretValuesToRedact.push(plain);
+  const roleProfile = String(credRow.role_profile);
+
+  if (credRow.auth_type === 'bearer_token') {
+    headers['Authorization'] = `Bearer ${plain}`;
+  } else if (credRow.auth_type === 'cookie') {
+    headers['Cookie'] = plain;
+  } else if (credRow.auth_type === 'basic_header') {
+    headers['Authorization'] = plain;
+  } else if (credRow.auth_type === 'login_form') {
+    const loginUrlRaw = credRow.login_url ? String(credRow.login_url) : `${targetOrigin}/login`;
+    const loginUrl = loginUrlRaw.startsWith('http') ? loginUrlRaw : `${targetOrigin}${loginUrlRaw.startsWith('/') ? '' : '/'}${loginUrlRaw}`;
+    const username = credRow.username_hint ? String(credRow.username_hint) : 'testuser@example.test';
+    try {
+      const loginRes = await httpClient.request(loginUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: username, username, password: plain }),
+        followRedirects: false,
+      });
+      if (loginRes.setCookies.length > 0) {
+        const cookiePairs = loginRes.setCookies.map((c) => c.split(';')[0]).filter(Boolean);
+        if (cookiePairs.length > 0) {
+          headers['Cookie'] = cookiePairs.join('; ');
+          for (const cp of cookiePairs) secretValuesToRedact.push(cp);
+        }
+      }
+      try {
+        const bodyJson = JSON.parse(loginRes.bodyText) as { token?: string; accessToken?: string; access_token?: string };
+        const tok = bodyJson.token || bodyJson.accessToken || bodyJson.access_token;
+        if (tok && typeof tok === 'string') {
+          headers['Authorization'] = `Bearer ${tok}`;
+          secretValuesToRedact.push(tok);
+        }
+      } catch {
+        // Non-JSON login response; cookie-only auth is fine
+      }
+      if (Object.keys(headers).length === 0) {
+        appendScanLog(scanId, 'warn', null, `Form login credential "${credRow.label}" did not yield session cookie or token.`);
+      } else {
+        appendScanLog(scanId, 'info', null, `Acquired authenticated session via login form for role "${roleProfile}".`);
+      }
+    } catch (err) {
+      appendScanLog(
+        scanId,
+        'warn',
+        null,
+        `Form login failed for "${credRow.label}": ${err instanceof Error ? err.message : 'unknown error'}`
+      );
+    }
+  }
+
+  return { headers, roleProfile };
+}
+
 async function executeScanAsync(scanId: string): Promise<void> {
   const db = getDb();
   const scanRow = db
     .prepare(
       `SELECT s.*, a.target_url, a.hostname, a.is_practice_target, a.ownership_status,
               a.scope_include_paths, a.scope_exclude_paths,
-              c.selected_modules_json, c.max_depth, c.request_timeout_ms, c.rate_limit_rps,
-              c.allow_authenticated, c.credential_id, c.openapi_spec_raw,
-              c.sca_manifest_name, c.sca_manifest_raw, c.sast_filename, c.sast_code_raw
+              c.selected_modules_json, c.max_depth, c.max_urls, c.max_requests,
+              c.concurrency_limit, c.request_timeout_ms, c.rate_limit_rps,
+              c.allow_authenticated, c.credential_id, c.secondary_credential_id,
+              c.custom_headers_json, c.openapi_spec_raw,
+              c.sca_manifest_name, c.sca_manifest_raw, c.sast_filename, c.sast_code_raw, c.sast_files_json
        FROM scans s
        JOIN assets a ON a.id = s.asset_id
        JOIN scan_configurations c ON c.id = s.configuration_id
@@ -132,7 +226,6 @@ async function executeScanAsync(scanId: string): Promise<void> {
     scanId
   );
 
-  // Enforce ownership verification right before running active scan
   if (scanRow.ownership_status !== 'verified') {
     db.prepare(
       'UPDATE scans SET status = ?, completed_at = ?, error_message = ? WHERE id = ?'
@@ -144,7 +237,6 @@ async function executeScanAsync(scanId: string): Promise<void> {
   const selectedIds = JSON.parse(String(scanRow.selected_modules_json || '[]')) as string[];
   const modules = selectModulesForProfile(scanRow.profile as ScanProfile, selectedIds);
 
-  // Pre-create module execution rows
   const insertExec = db.prepare(
     `INSERT INTO scan_executions (id, scan_id, module_id, module_name, module_version, status)
      VALUES (?, ?, ?, ?, ?, 'pending')`
@@ -156,48 +248,74 @@ async function executeScanAsync(scanId: string): Promise<void> {
     insertExec.run(eid, scanId, mod.id, mod.name, mod.version);
   }
 
-  // Decrypt optional test credential if authorized
-  const authHeaders: Record<string, string> = {};
-  const secretValuesToRedact: string[] = [];
-  let authRoleProfile: string | null = null;
-
-  if (scanRow.allow_authenticated && scanRow.credential_id) {
-    const credRow = db
-      .prepare('SELECT * FROM scan_credentials WHERE id = ? AND organization_id = ?')
-      .get(String(scanRow.credential_id), String(scanRow.organization_id)) as Record<string, unknown> | undefined;
-
-    if (credRow) {
-      if (new Date(String(credRow.expires_at)).getTime() < Date.now()) {
-        appendScanLog(scanId, 'warn', null, 'Configured scan credential has expired; authenticated checks skipped.');
-      } else {
-        const plain = decryptSecret({
-          ciphertextHex: String(credRow.encrypted_secret_blob),
-          ivHex: String(credRow.iv_hex),
-          authTagHex: String(credRow.auth_tag_hex),
-        });
-        if (plain) {
-          secretValuesToRedact.push(plain);
-          authRoleProfile = String(credRow.role_profile);
-          if (credRow.auth_type === 'bearer_token') {
-            authHeaders['Authorization'] = `Bearer ${plain}`;
-          } else if (credRow.auth_type === 'cookie') {
-            authHeaders['Cookie'] = plain;
-          } else if (credRow.auth_type === 'basic_header') {
-            authHeaders['Authorization'] = plain;
-          }
-        } else {
-          appendScanLog(scanId, 'warn', null, 'Configured credential could not be decrypted; re-save credential.');
+  let customHeaders: Record<string, string> = {};
+  try {
+    const parsedHdrs = JSON.parse(String(scanRow.custom_headers_json || '{}'));
+    if (parsedHdrs && typeof parsedHdrs === 'object' && !Array.isArray(parsedHdrs)) {
+      for (const [k, v] of Object.entries(parsedHdrs)) {
+        if (typeof k === 'string' && typeof v === 'string' && k.trim()) {
+          customHeaders[k.trim()] = v;
         }
       }
     }
+  } catch {
+    customHeaders = {};
   }
 
+  let sastFiles: SastSourceFile[] = [];
+  try {
+    const parsedFiles = JSON.parse(String(scanRow.sast_files_json || '[]'));
+    if (Array.isArray(parsedFiles)) {
+      sastFiles = parsedFiles.filter(
+        (f): f is SastSourceFile => Boolean(f && typeof f.filename === 'string' && typeof f.content === 'string')
+      );
+    }
+  } catch {
+    sastFiles = [];
+  }
+
+  const maxRequests = Number(scanRow.max_requests || (scanRow.profile === 'quick' ? 60 : scanRow.profile === 'comprehensive' ? 400 : 200));
   const httpClient = new SsrfSafeHttpClient({
     allowedHostname: String(scanRow.hostname),
     allowPracticeTarget: Boolean(scanRow.is_practice_target),
     rateLimitRps: Number(scanRow.rate_limit_rps || 5),
-    timeoutMs: Number(scanRow.request_timeout_ms || 8000),
+    timeoutMs: Number(scanRow.request_timeout_ms || 10000),
+    maxRequests,
+    defaultHeaders: customHeaders,
   });
+
+  const targetOrigin = new URL(String(scanRow.target_url)).origin;
+  const secretValuesToRedact: string[] = Object.values(customHeaders).filter((v) => v.length >= 6);
+  let authHeaders: Record<string, string> = {};
+  let authRoleProfile: string | null = null;
+  let secondaryAuthHeaders: Record<string, string> = {};
+  let secondaryAuthRoleProfile: string | null = null;
+
+  if (scanRow.allow_authenticated) {
+    const primary = await resolveCredentialAuthHeaders(
+      db,
+      scanId,
+      scanRow.credential_id ? String(scanRow.credential_id) : null,
+      String(scanRow.organization_id),
+      httpClient,
+      targetOrigin,
+      secretValuesToRedact
+    );
+    authHeaders = primary.headers;
+    authRoleProfile = primary.roleProfile;
+
+    const secondary = await resolveCredentialAuthHeaders(
+      db,
+      scanId,
+      scanRow.secondary_credential_id ? String(scanRow.secondary_credential_id) : null,
+      String(scanRow.organization_id),
+      httpClient,
+      targetOrigin,
+      secretValuesToRedact
+    );
+    secondaryAuthHeaders = secondary.headers;
+    secondaryAuthRoleProfile = secondary.roleProfile;
+  }
 
   const sharedState: ScanContext['sharedState'] = {
     discoveredUrls: new Set<string>(),
@@ -212,21 +330,29 @@ async function executeScanAsync(scanId: string): Promise<void> {
     isPracticeTarget: Boolean(scanRow.is_practice_target),
     profile: scanRow.profile as ScanProfile,
     maxDepth: Number(scanRow.max_depth || 2),
-    requestTimeoutMs: Number(scanRow.request_timeout_ms || 8000),
+    maxUrls: Number(scanRow.max_urls || (scanRow.profile === 'quick' ? 12 : 60)),
+    maxRequests,
+    concurrencyLimit: Number(scanRow.concurrency_limit || 3),
+    requestTimeoutMs: Number(scanRow.request_timeout_ms || 10000),
     rateLimitRps: Number(scanRow.rate_limit_rps || 5),
     scopeIncludePaths: String(scanRow.scope_include_paths || '/').split(',').map((s) => s.trim()).filter(Boolean),
     scopeExcludePaths: String(scanRow.scope_exclude_paths || '').split(',').map((s) => s.trim()).filter(Boolean),
     allowAuthenticated: Boolean(scanRow.allow_authenticated),
     authHeaders,
     authRoleProfile,
+    secondaryAuthHeaders,
+    secondaryAuthRoleProfile,
+    customHeaders,
     secretValuesToRedact,
     openapiSpecRaw: scanRow.openapi_spec_raw ? String(scanRow.openapi_spec_raw) : null,
     scaManifestName: scanRow.sca_manifest_name ? String(scanRow.sca_manifest_name) : null,
     scaManifestRaw: scanRow.sca_manifest_raw ? String(scanRow.sca_manifest_raw) : null,
     sastFilename: scanRow.sast_filename ? String(scanRow.sast_filename) : null,
     sastCodeRaw: scanRow.sast_code_raw ? String(scanRow.sast_code_raw) : null,
+    sastFiles,
     isCancelled: () => cancelledScans.has(scanId),
     httpFetch: (url, init) => httpClient.request(url, init),
+    getHttpStats: () => httpClient.getStats(),
     log: (level, msg) => appendScanLog(scanId, level, null, msg),
     sharedState,
   };
@@ -235,8 +361,10 @@ async function executeScanAsync(scanId: string): Promise<void> {
     scanId,
     'info',
     null,
-    `Starting ${scanRow.profile} assessment on ${scanRow.target_url} with ${modules.length} module(s).`
+    `Starting ${scanRow.profile} assessment on ${scanRow.target_url} with ${modules.length} module(s) (maxDepth=${ctx.maxDepth}, maxUrls=${ctx.maxUrls}, budget=${ctx.maxRequests}, concurrency=${ctx.concurrencyLimit}).`
   );
+
+  const seenCheckKeys = new Set<string>();
 
   for (let idx = 0; idx < modules.length; idx++) {
     const mod = modules[idx];
@@ -260,13 +388,23 @@ async function executeScanAsync(scanId: string): Promise<void> {
     );
     appendScanLog(scanId, 'info', mod.id, `Executing ${mod.name} (v${mod.version})...`);
 
+    const moduleBudgetMs = Math.max(
+      mod.defaultTimeoutMs,
+      ctx.profile === 'comprehensive' ? 120_000 : ctx.profile === 'standard' ? 60_000 : 20_000
+    );
+
+    let timerHandle: ReturnType<typeof setTimeout> | undefined;
     try {
       const result = await Promise.race([
         mod.execute(ctx),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`Module timed out after ${mod.defaultTimeoutMs}ms`)), mod.defaultTimeoutMs)
-        ),
+        new Promise<never>((_, reject) => {
+          timerHandle = setTimeout(
+            () => reject(new Error(`Module timed out after ${moduleBudgetMs}ms`)),
+            moduleBudgetMs
+          );
+        }),
       ]);
+      if (timerHandle) clearTimeout(timerHandle);
 
       for (const l of result.logs) {
         appendScanLog(scanId, l.level, mod.id, l.message);
@@ -277,7 +415,12 @@ async function executeScanAsync(scanId: string): Promise<void> {
         `INSERT INTO security_checks (id, scan_id, asset_id, module_id, check_key, title, category, status, observed_value, expected_value, explanation, remediation, cwe_id, owasp_category, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       );
+
+      let insertedChecksForMod = 0;
       for (const chk of result.checks) {
+        if (seenCheckKeys.has(chk.checkKey)) continue;
+        seenCheckKeys.add(chk.checkKey);
+        insertedChecksForMod += 1;
         insertCheck.run(
           crypto.randomUUID(),
           scanId,
@@ -328,13 +471,15 @@ async function executeScanAsync(scanId: string): Promise<void> {
         findings: result.findings,
       });
 
+      const uniqueFindingCount = new Set(findingIds).size;
       const modDuration = Date.now() - modStart;
       db.prepare(
         `UPDATE scan_executions
          SET status = 'completed', completed_at = ?, duration_ms = ?, checks_executed = ?, findings_created = ?
          WHERE id = ?`
-      ).run(new Date().toISOString(), modDuration, result.checks.length, findingIds.length, execId);
+      ).run(new Date().toISOString(), modDuration, insertedChecksForMod, uniqueFindingCount, execId);
     } catch (err) {
+      if (timerHandle) clearTimeout(timerHandle);
       const msg = err instanceof Error ? err.message : 'Unknown module error';
       appendScanLog(scanId, 'error', mod.id, `Module failed safely without terminating scan: ${msg}`);
       db.prepare(
@@ -343,90 +488,24 @@ async function executeScanAsync(scanId: string): Promise<void> {
     }
   }
 
-  // Finalize scan counts & posture score
-  const checksRows = db
-    .prepare('SELECT status FROM security_checks WHERE scan_id = ?')
-    .all(scanId) as Array<{ status: string }>;
-
-  const counts = {
-    total: checksRows.length,
-    passed: 0,
-    failed: 0,
-    potential: 0,
-    informational: 0,
-    not_applicable: 0,
-    not_performed: 0,
-    manual_required: 0,
-  };
-
-  for (const r of checksRows) {
-    if (r.status === 'passed') counts.passed += 1;
-    else if (r.status === 'failed') counts.failed += 1;
-    else if (r.status === 'potential') counts.potential += 1;
-    else if (r.status === 'informational') counts.informational += 1;
-    else if (r.status === 'not_applicable') counts.not_applicable += 1;
-    else if (r.status === 'not_performed') counts.not_performed += 1;
-    else if (r.status === 'manual_required') counts.manual_required += 1;
-  }
-
-  const scanVulns = db
-    .prepare('SELECT severity, verification_status FROM vulnerabilities WHERE latest_scan_id = ?')
-    .all(scanId) as Array<{ severity: 'critical' | 'high' | 'medium' | 'low' | 'informational'; verification_status: 'open' | 'confirmed' | 'false_positive' | 'risk_accepted' | 'remediated' | 'reopened' }>;
-
-  const sevCounts = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
-  for (const v of scanVulns) {
-    if (v.verification_status === 'false_positive' || v.verification_status === 'remediated') continue;
-    if (v.severity === 'critical') sevCounts.critical += 1;
-    else if (v.severity === 'high') sevCounts.high += 1;
-    else if (v.severity === 'medium') sevCounts.medium += 1;
-    else if (v.severity === 'low') sevCounts.low += 1;
-    else sevCounts.info += 1;
-  }
-
-  const posture = calculatePostureScore({
-    passedChecks: counts.passed,
-    failedChecks: counts.failed,
-    findings: scanVulns.map((v) => ({ severity: v.severity, verificationStatus: v.verification_status })),
-  });
-
   generateComplianceMappingsForScan(db, scanId);
+  const stats = reconcileScanCountersInDb(db, scanId);
 
   const finalStatus = cancelledScans.has(scanId) ? 'cancelled' : 'completed';
   const durationMs = Date.now() - startedAtMs;
 
   db.prepare(
     `UPDATE scans
-     SET status = ?, progress_pct = 100, current_module = NULL, completed_at = ?, duration_ms = ?,
-         posture_score = ?, total_checks = ?, passed_checks = ?, failed_checks = ?, potential_checks = ?,
-         informational_checks = ?, not_applicable_checks = ?, not_performed_checks = ?, manual_required_checks = ?,
-         critical_count = ?, high_count = ?, medium_count = ?, low_count = ?, info_count = ?
+     SET status = ?, progress_pct = 100, current_module = NULL, completed_at = ?, duration_ms = ?
      WHERE id = ?`
-  ).run(
-    finalStatus,
-    new Date().toISOString(),
-    durationMs,
-    posture.score,
-    counts.total,
-    counts.passed,
-    counts.failed,
-    counts.potential,
-    counts.informational,
-    counts.not_applicable,
-    counts.not_performed,
-    counts.manual_required,
-    sevCounts.critical,
-    sevCounts.high,
-    sevCounts.medium,
-    sevCounts.low,
-    sevCounts.info,
-    scanId
-  );
+  ).run(finalStatus, new Date().toISOString(), durationMs, scanId);
 
+  const httpStats = httpClient.getStats();
   appendScanLog(
     scanId,
     'info',
     null,
-    `Assessment ${finalStatus} in ${durationMs}ms. Checks: ${counts.total} (${counts.passed} passed, ${counts.failed} failed, ${counts.manual_required} manual required).`
+    `Assessment ${finalStatus} in ${durationMs}ms (${httpStats.requestsSent} HTTP request(s), ${httpStats.retries} retries). Checks: ${stats.totalChecks} (PASS=${stats.passedChecks}, FAIL=${stats.failedChecks}, POTENTIAL=${stats.potentialChecks}, INFO=${stats.informationalChecks}, MANUAL_REQUIRED=${stats.manualRequiredChecks}, NOT_PERFORMED=${stats.notPerformedChecks}, NOT_APPLICABLE=${stats.notApplicableChecks}).`
   );
 
   writeAuditLog(db, {
@@ -435,15 +514,21 @@ async function executeScanAsync(scanId: string): Promise<void> {
     action: `scan.${finalStatus}`,
     entityType: 'scan',
     entityId: scanId,
-    details: { assetId: ctx.assetId, durationMs, postureScore: posture.score, totalChecks: counts.total },
+    details: {
+      assetId: ctx.assetId,
+      durationMs,
+      postureScore: stats.postureScore,
+      totalChecks: stats.totalChecks,
+      httpRequests: httpStats.requestsSent,
+    },
   });
 
-  if (sevCounts.critical > 0 || sevCounts.high > 0) {
+  if (stats.severityCountsActive.critical > 0 || stats.severityCountsActive.high > 0) {
     createNotification(db, {
       organizationId: ctx.organizationId,
-      severity: sevCounts.critical > 0 ? 'critical' : 'high',
-      title: `Assessment Completed: ${sevCounts.critical} Critical, ${sevCounts.high} High Findings`,
-      message: `Scan on ${scanRow.target_url} completed with posture score ${posture.score ?? 'N/A'}.`,
+      severity: stats.severityCountsActive.critical > 0 ? 'critical' : 'high',
+      title: `Assessment Completed: ${stats.severityCountsActive.critical} Critical, ${stats.severityCountsActive.high} High Findings`,
+      message: `Scan on ${scanRow.target_url} completed with posture score ${stats.postureScore ?? 'N/A'}.`,
     });
   }
 }

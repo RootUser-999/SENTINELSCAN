@@ -1,4 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { normalizeCheckOutcome } from '../db/types.ts';
+import { computeReconciledScanStats } from '../intelligence/reconcile.ts';
 
 export function buildStructuredReportData(
   db: DatabaseSync,
@@ -20,13 +22,19 @@ export function buildStructuredReportData(
 
   if (!scan) return null;
 
+  const reconciled = computeReconciledScanStats(db, scanId);
+
   const executions = db
-    .prepare('SELECT * FROM scan_executions WHERE scan_id = ? ORDER BY started_at ASC')
+    .prepare('SELECT * FROM scan_executions WHERE scan_id = ? ORDER BY rowid ASC')
     .all(scanId) as Array<Record<string, unknown>>;
 
-  const checks = db
+  const rawChecks = db
     .prepare('SELECT * FROM security_checks WHERE scan_id = ? ORDER BY category, title')
     .all(scanId) as Array<Record<string, unknown>>;
+  const checks: Array<Record<string, unknown>> = rawChecks.map((c) => ({
+    ...c,
+    normalized_status: normalizeCheckOutcome(String(c.status)),
+  }));
 
   const findings = db
     .prepare(
@@ -95,24 +103,34 @@ export function buildStructuredReportData(
     limitationsAndDisclaimers: [
       'Automated web security assessments observe externally accessible HTTP responses, TLS parameters, DNS records, and user-supplied artifacts.',
       'Security posture scores reflect only executed automated checks and do not guarantee absence of vulnerabilities or regulatory compliance (GDPR, PCI DSS, ISO 27001).',
-      'Checks marked manual_required or not_performed were not verified remotely and must never be interpreted as passed.',
+      'Checks marked MANUAL_REQUIRED or NOT_PERFORMED were not verified remotely and must never be interpreted as PASS.',
     ],
     executiveSummary: {
-      postureScore: scan.posture_score,
-      totalChecks: scan.total_checks,
-      passedChecks: scan.passed_checks,
-      failedChecks: scan.failed_checks,
-      potentialChecks: scan.potential_checks,
-      informationalChecks: scan.informational_checks,
-      notApplicableChecks: scan.not_applicable_checks,
-      notPerformedChecks: scan.not_performed_checks,
-      manualRequiredChecks: scan.manual_required_checks,
+      postureScore: reconciled.postureScore,
+      totalChecks: reconciled.totalChecks,
+      passedChecks: reconciled.passedChecks,
+      failedChecks: reconciled.failedChecks,
+      potentialChecks: reconciled.potentialChecks,
+      informationalChecks: reconciled.informationalChecks,
+      notApplicableChecks: reconciled.notApplicableChecks,
+      notPerformedChecks: reconciled.notPerformedChecks,
+      manualRequiredChecks: reconciled.manualRequiredChecks,
+      byNormalizedStatus: reconciled.byNormalizedStatus,
+      activeFindingsTotal: reconciled.activeFindingsTotal,
+      allScanFindingsTotal: reconciled.allScanFindingsTotal,
       severityDistribution: {
-        critical: scan.critical_count,
-        high: scan.high_count,
-        medium: scan.medium_count,
-        low: scan.low_count,
-        informational: scan.info_count,
+        critical: reconciled.severityCountsActive.critical,
+        high: reconciled.severityCountsActive.high,
+        medium: reconciled.severityCountsActive.medium,
+        low: reconciled.severityCountsActive.low,
+        informational: reconciled.severityCountsActive.info,
+      },
+      allDetectedSeverityDistribution: {
+        critical: reconciled.severityCountsAll.critical,
+        high: reconciled.severityCountsAll.high,
+        medium: reconciled.severityCountsAll.medium,
+        low: reconciled.severityCountsAll.low,
+        informational: reconciled.severityCountsAll.info,
       },
     },
     moduleExecutions: executions,

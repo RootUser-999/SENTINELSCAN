@@ -24,9 +24,11 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
 
   // Credential Vault form
   const [credLabel, setCredLabel] = useState('');
-  const [credType, setCredType] = useState<'bearer_token' | 'cookie' | 'basic_header'>('bearer_token');
+  const [credType, setCredType] = useState<'bearer_token' | 'cookie' | 'basic_header' | 'login_form'>('bearer_token');
   const [credRole, setCredRole] = useState<'authenticated_user' | 'administrator' | 'custom'>('authenticated_user');
   const [credAssetId, setCredAssetId] = useState('');
+  const [credLoginUrl, setCredLoginUrl] = useState('/login');
+  const [credUsernameHint, setCredUsernameHint] = useState('');
   const [credSecret, setCredSecret] = useState('');
 
   // Member invite form
@@ -70,11 +72,14 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
           authType: credType,
           roleProfile: credRole,
           assetId: credAssetId || null,
+          loginUrl: credType === 'login_form' ? credLoginUrl.trim() || '/login' : null,
+          usernameHint: credType === 'login_form' ? credUsernameHint.trim() || null : null,
           secretValue: credSecret,
           ttlDays: 7,
         }),
       });
       setCredLabel('');
+      setCredUsernameHint('');
       setCredSecret('');
       onToast('Credential encrypted (AES-256-GCM) and stored in vault.', 'success');
       loadAll();
@@ -170,6 +175,7 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
                     <option value="bearer_token">Bearer Token</option>
                     <option value="cookie">Session Cookie</option>
                     <option value="basic_header">Custom Auth Header</option>
+                    <option value="login_form">Login Form (Email + Password)</option>
                   </select>
                 </div>
                 <div>
@@ -200,8 +206,37 @@ export const SettingsAuditView: React.FC<SettingsAuditViewProps> = ({
                   ))}
                 </select>
               </div>
+              {credType === 'login_form' && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label htmlFor="cred-login-url" className="block text-slate-300 mb-1">Login Endpoint Path/URL</label>
+                    <input
+                      id="cred-login-url"
+                      type="text"
+                      value={credLoginUrl}
+                      onChange={(e) => setCredLoginUrl(e.target.value)}
+                      placeholder="/login"
+                      className="w-full px-3 py-2 bg-[#090D16] border border-slate-700 rounded text-slate-100"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="cred-username" className="block text-slate-300 mb-1">Test Username / Email</label>
+                    <input
+                      id="cred-username"
+                      type="text"
+                      required
+                      value={credUsernameHint}
+                      onChange={(e) => setCredUsernameHint(e.target.value)}
+                      placeholder="qa-user@example.test"
+                      className="w-full px-3 py-2 bg-[#090D16] border border-slate-700 rounded text-slate-100"
+                    />
+                  </div>
+                </div>
+              )}
               <div>
-                <label htmlFor="cred-secret" className="block text-slate-300 mb-1">Secret Token / Cookie Value</label>
+                <label htmlFor="cred-secret" className="block text-slate-300 mb-1">
+                  {credType === 'login_form' ? 'Test Account Password' : 'Secret Token / Cookie Value'}
+                </label>
                 <input
                   id="cred-secret"
                   type="password"

@@ -38,21 +38,24 @@ export function getSeverityStyle(severity: string): { text: string; border: stri
 }
 
 export function getCheckOutcomeLabel(status: string): { label: string; colorClass: string } {
-  switch (status) {
-    case 'passed':
-      return { label: 'Passed', colorClass: 'text-emerald-400' };
-    case 'failed':
-      return { label: 'Failed', colorClass: 'text-red-400' };
-    case 'potential':
-      return { label: 'Potential', colorClass: 'text-amber-400' };
-    case 'informational':
-      return { label: 'Informational', colorClass: 'text-slate-400' };
-    case 'manual_required':
-      return { label: 'Manual Required', colorClass: 'text-amber-300' };
-    case 'not_applicable':
-      return { label: 'Not Applicable', colorClass: 'text-slate-500' };
+  const upper = status.toUpperCase();
+  switch (upper) {
+    case 'PASSED':
+    case 'PASS':
+      return { label: 'PASS', colorClass: 'text-emerald-400' };
+    case 'FAILED':
+    case 'FAIL':
+      return { label: 'FAIL', colorClass: 'text-red-400' };
+    case 'POTENTIAL':
+      return { label: 'POTENTIAL', colorClass: 'text-amber-400' };
+    case 'INFORMATIONAL':
+      return { label: 'INFORMATIONAL', colorClass: 'text-slate-400' };
+    case 'MANUAL_REQUIRED':
+      return { label: 'MANUAL_REQUIRED', colorClass: 'text-amber-300' };
+    case 'NOT_APPLICABLE':
+      return { label: 'NOT_APPLICABLE', colorClass: 'text-slate-500' };
     default:
-      return { label: 'Not Performed', colorClass: 'text-slate-500' };
+      return { label: 'NOT_PERFORMED', colorClass: 'text-slate-500' };
   }
 }
 

@@ -50,29 +50,36 @@ interface CompareResult {
   checkDiffs: Array<{ checkKey: string; title: string; baselineStatus: string; targetStatus: string }>;
 }
 
+interface VaultCredentialMeta {
+  id: string;
+  label: string;
+  auth_type: string;
+  role_profile: string;
+}
+
 const PROFILE_INFO: Record<
   'quick' | 'standard' | 'comprehensive' | 'custom',
   { title: string; impact: string; description: string }
 > = {
   quick: {
     title: 'Quick Assessment',
-    impact: 'Minimal traffic (~10 GET/HEAD/OPTIONS requests). Safe for production.',
+    impact: 'Minimal traffic (~10–25 requests). Safe for production.',
     description: 'Evaluates HTTPS/TLS transport, 10 security headers + CORS, DNS SPF/DMARC/CAA, and basic sensitive file probes.',
   },
   standard: {
     title: 'Standard Assessment',
-    impact: 'Low traffic (~15–25 requests). Non-destructive passive & API probes.',
-    description: 'Includes Quick checks plus light crawling, cookie/session flags, OpenAPI/GraphQL discovery, and optional SCA/SAST.',
+    impact: 'Controlled scoped crawl + non-destructive OWASP/API probes.',
+    description: 'Includes Quick checks plus recursive crawling, OWASP active probes (SQLi, XSS, CSRF, IDOR, traversal, redirect), cookies, and API/GraphQL checks.',
   },
   comprehensive: {
     title: 'Comprehensive Assessment',
-    impact: 'Moderate scoped traffic + authenticated differential checks when credentials are attached.',
-    description: 'Runs all 9 modules including extended in-scope discovery, API inventory, dependency OSV matching, SAST, and role boundary checks.',
+    impact: 'Deep scoped crawl + full OWASP probes + multi-role auth testing.',
+    description: 'Runs all 10 modules including deep crawling, OWASP probes, API/JWT/GraphQL security, OSV SCA, multi-file SAST, and role boundary verification.',
   },
   custom: {
     title: 'Custom Assessment',
-    impact: 'User-defined module selection, request rate limit, and timeouts.',
-    description: 'Select specific scanner modules and supply OpenAPI, dependency manifest, or source code artifacts.',
+    impact: 'User-defined modules, crawl depth, URL/request budget, and concurrency.',
+    description: 'Select specific scanner modules and configure custom crawl caps, credentials, OpenAPI, dependency manifests, or source files.',
   },
 };
 
@@ -97,11 +104,26 @@ export const ScansView: React.FC<ScansViewProps> = ({
   const [profile, setProfile] = useState<'quick' | 'standard' | 'comprehensive' | 'custom'>('standard');
   const [selectedModules, setSelectedModules] = useState<string[]>(modules.map((m) => m.id));
   const [rateLimitRps, setRateLimitRps] = useState(5);
+  const [maxDepth, setMaxDepth] = useState(2);
+  const [maxUrls, setMaxUrls] = useState(60);
+  const [maxRequests, setMaxRequests] = useState(250);
+  const [concurrencyLimit, setConcurrencyLimit] = useState(3);
+  const [requestTimeoutMs, setRequestTimeoutMs] = useState(10000);
+
+  // Authenticated & multi-role testing state
+  const [credentials, setCredentials] = useState<VaultCredentialMeta[]>([]);
+  const [allowAuthenticated, setAllowAuthenticated] = useState(false);
+  const [credentialId, setCredentialId] = useState('');
+  const [secondaryCredentialId, setSecondaryCredentialId] = useState('');
+  const [customHeadersText, setCustomHeadersText] = useState('');
+
+  // Optional API / SCA / SAST inputs
   const [openapiSpecRaw, setOpenapiSpecRaw] = useState('');
   const [scaManifestName, setScaManifestName] = useState('package.json');
   const [scaManifestRaw, setScaManifestRaw] = useState('');
   const [sastFilename, setSastFilename] = useState('checkout.ts');
   const [sastCodeRaw, setSastCodeRaw] = useState('');
+  const [sastFiles, setSastFiles] = useState<Array<{ filename: string; content: string }>>([]);
   const [launching, setLaunching] = useState(false);
 
   // Detail polling state
@@ -115,6 +137,14 @@ export const ScansView: React.FC<ScansViewProps> = ({
   const [compareData, setCompareData] = useState<CompareResult | null>(null);
 
   const canLaunch = userRole === 'admin' || userRole === 'analyst';
+
+  useEffect(() => {
+    if (subView === 'launch' && canLaunch) {
+      apiRequest<{ credentials: VaultCredentialMeta[] }>('/credentials')
+        .then((res) => setCredentials(res.credentials || []))
+        .catch(() => {});
+    }
+  }, [subView, canLaunch]);
 
   useEffect(() => {
     if (preselectedAssetId) {
@@ -194,10 +224,42 @@ export const ScansView: React.FC<ScansViewProps> = ({
       setSastFilename('checkoutHandler.ts');
       setSastCodeRaw(res.sastSnippet);
       setProfile('comprehensive');
+      setMaxDepth(3);
+      setMaxUrls(80);
+      setMaxRequests(350);
       onToast('Loaded Practice Lab OpenAPI, package.json, and SAST review sample.', 'success');
     } catch (err) {
       onToast(err instanceof Error ? err.message : 'Failed to load samples', 'error');
     }
+  };
+
+  const handleMultiSastUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []).slice(0, 15);
+    if (files.length === 0) return;
+    const loaded: Array<{ filename: string; content: string }> = [];
+    for (const f of files) {
+      const text = await f.text();
+      loaded.push({ filename: f.name, content: text.slice(0, 250_000) });
+    }
+    setSastFiles(loaded);
+    if (loaded.length === 1) {
+      setSastFilename(loaded[0].filename);
+      setSastCodeRaw(loaded[0].content);
+    }
+    onToast(`Loaded ${loaded.length} authorized source file(s) for SAST.`, 'success');
+  };
+
+  const parseCustomHeaders = (): Record<string, string> => {
+    const map: Record<string, string> = {};
+    for (const line of customHeadersText.split(/\r?\n/)) {
+      const idx = line.indexOf(':');
+      if (idx > 0) {
+        const k = line.slice(0, idx).trim();
+        const v = line.slice(idx + 1).trim();
+        if (k && v) map[k] = v;
+      }
+    }
+    return map;
   };
 
   const handleLaunchScan = async (e: React.FormEvent) => {
@@ -214,12 +276,22 @@ export const ScansView: React.FC<ScansViewProps> = ({
           assetId,
           profile,
           selectedModules: profile === 'custom' ? selectedModules : undefined,
+          maxDepth,
+          maxUrls,
+          maxRequests,
+          concurrencyLimit,
+          requestTimeoutMs,
           rateLimitRps,
+          allowAuthenticated,
+          credentialId: allowAuthenticated && credentialId ? credentialId : null,
+          secondaryCredentialId: allowAuthenticated && secondaryCredentialId ? secondaryCredentialId : null,
+          customHeaders: parseCustomHeaders(),
           openapiSpecRaw: openapiSpecRaw.trim() || null,
           scaManifestName: scaManifestRaw.trim() ? scaManifestName : null,
           scaManifestRaw: scaManifestRaw.trim() || null,
           sastFilename: sastCodeRaw.trim() ? sastFilename : null,
           sastCodeRaw: sastCodeRaw.trim() || null,
+          sastFiles,
         }),
       });
       onToast('Security assessment queued and running.', 'success');
@@ -298,7 +370,7 @@ export const ScansView: React.FC<ScansViewProps> = ({
           <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-4">
             <div>
               <h2 className="text-base font-semibold text-slate-100">Configure Security Assessment</h2>
-              <p className="text-xs text-slate-400">Only ownership-verified targets can be assessed.</p>
+              <p className="text-xs text-slate-400">Configure crawl scope, concurrency, authenticated test roles, and artifact inputs.</p>
             </div>
             <button
               type="button"
@@ -312,14 +384,14 @@ export const ScansView: React.FC<ScansViewProps> = ({
 
           {verifiedAssets.length === 0 ? (
             <div className="p-4 bg-amber-950/30 border border-amber-800/50 rounded text-xs text-amber-200">
-              No ownership-verified assets are available yet. Register and verify an asset in the Websites & Assets tab first.
+              No authorized assets are available yet. Register an asset in the Websites & Assets tab first.
             </div>
           ) : (
             <>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                <div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
+                <div className="lg:col-span-2">
                   <label htmlFor="scan-asset" className="block text-xs font-medium text-slate-300 mb-1.5">
-                    Target Asset (Verified)
+                    Target Asset (Authorized)
                   </label>
                   <select
                     id="scan-asset"
@@ -336,18 +408,76 @@ export const ScansView: React.FC<ScansViewProps> = ({
                 </div>
 
                 <div>
-                  <label htmlFor="scan-rps" className="block text-xs font-medium text-slate-300 mb-1.5">
-                    Rate Limit (Requests / Second)
+                  <label htmlFor="scan-depth" className="block text-xs font-medium text-slate-300 mb-1.5">
+                    Crawl Depth
                   </label>
                   <input
-                    id="scan-rps"
+                    id="scan-depth"
                     type="number"
                     min={1}
-                    max={20}
-                    value={rateLimitRps}
-                    onChange={(e) => setRateLimitRps(Number(e.target.value))}
+                    max={5}
+                    value={maxDepth}
+                    onChange={(e) => setMaxDepth(Number(e.target.value))}
                     className="w-full px-3 py-2 text-xs font-mono bg-[#090D16] border border-slate-700 rounded text-slate-100"
                   />
+                </div>
+
+                <div>
+                  <label htmlFor="scan-max-urls" className="block text-xs font-medium text-slate-300 mb-1.5">
+                    URL Limit
+                  </label>
+                  <input
+                    id="scan-max-urls"
+                    type="number"
+                    min={5}
+                    max={250}
+                    value={maxUrls}
+                    onChange={(e) => setMaxUrls(Number(e.target.value))}
+                    className="w-full px-3 py-2 text-xs font-mono bg-[#090D16] border border-slate-700 rounded text-slate-100"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="scan-max-requests" className="block text-xs font-medium text-slate-300 mb-1.5">
+                    Request Limit
+                  </label>
+                  <input
+                    id="scan-max-requests"
+                    type="number"
+                    min={20}
+                    max={1500}
+                    value={maxRequests}
+                    onChange={(e) => setMaxRequests(Number(e.target.value))}
+                    className="w-full px-3 py-2 text-xs font-mono bg-[#090D16] border border-slate-700 rounded text-slate-100"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="scan-rps" className="block text-xs font-medium text-slate-300 mb-1.5">
+                    Rate (RPS) / Workers
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      id="scan-rps"
+                      type="number"
+                      min={1}
+                      max={20}
+                      value={rateLimitRps}
+                      onChange={(e) => setRateLimitRps(Number(e.target.value))}
+                      aria-label="Rate limit requests per second"
+                      className="w-1/2 px-2 py-2 text-xs font-mono bg-[#090D16] border border-slate-700 rounded text-slate-100"
+                    />
+                    <input
+                      id="scan-concurrency"
+                      type="number"
+                      min={1}
+                      max={6}
+                      value={concurrencyLimit}
+                      onChange={(e) => setConcurrencyLimit(Number(e.target.value))}
+                      aria-label="Worker concurrency"
+                      className="w-1/2 px-2 py-2 text-xs font-mono bg-[#090D16] border border-slate-700 rounded text-slate-100"
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -410,6 +540,81 @@ export const ScansView: React.FC<ScansViewProps> = ({
                 </div>
               )}
 
+              {/* Authenticated Testing & Role Comparison */}
+              <div className="p-4 bg-[#090D16] border border-slate-800 rounded space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-200 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={allowAuthenticated}
+                      onChange={(e) => setAllowAuthenticated(e.target.checked)}
+                    />
+                    <span>Enable Authorized Authenticated Testing & Role Comparison</span>
+                  </label>
+                  <div className="flex items-center gap-2 text-xs">
+                    <label htmlFor="scan-timeout" className="text-slate-400">Request Timeout (ms):</label>
+                    <input
+                      id="scan-timeout"
+                      type="number"
+                      min={2000}
+                      max={25000}
+                      step={500}
+                      value={requestTimeoutMs}
+                      onChange={(e) => setRequestTimeoutMs(Number(e.target.value))}
+                      className="w-24 px-2 py-1 font-mono bg-[#0F172A] border border-slate-700 rounded text-slate-200"
+                    />
+                  </div>
+                </div>
+
+                {allowAuthenticated && (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 border-t border-slate-800/80 text-xs">
+                    <div>
+                      <label htmlFor="scan-cred-1" className="block text-slate-300 mb-1">Primary Role Credential</label>
+                      <select
+                        id="scan-cred-1"
+                        value={credentialId}
+                        onChange={(e) => setCredentialId(e.target.value)}
+                        className="w-full px-2.5 py-2 bg-[#0F172A] border border-slate-700 rounded text-slate-100"
+                      >
+                        <option value="">Select vault credential...</option>
+                        {credentials.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.label} ({c.role_profile} · {c.auth_type})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label htmlFor="scan-cred-2" className="block text-slate-300 mb-1">Secondary Role (Optional Comparison)</label>
+                      <select
+                        id="scan-cred-2"
+                        value={secondaryCredentialId}
+                        onChange={(e) => setSecondaryCredentialId(e.target.value)}
+                        className="w-full px-2.5 py-2 bg-[#0F172A] border border-slate-700 rounded text-slate-100"
+                      >
+                        <option value="">None</option>
+                        {credentials.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.label} ({c.role_profile} · {c.auth_type})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label htmlFor="scan-custom-hdrs" className="block text-slate-300 mb-1">Custom Auth Headers (Header: Value)</label>
+                      <textarea
+                        id="scan-custom-hdrs"
+                        rows={2}
+                        value={customHeadersText}
+                        onChange={(e) => setCustomHeadersText(e.target.value)}
+                        placeholder="X-Tenant-Id: staging-101"
+                        className="w-full px-2.5 py-1.5 font-mono bg-[#0F172A] border border-slate-700 rounded text-slate-200"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Optional API / SCA / SAST Inputs */}
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 pt-2 border-t border-slate-800">
                 <div>
@@ -441,6 +646,9 @@ export const ScansView: React.FC<ScansViewProps> = ({
                       <option value="package-lock.json">package-lock.json</option>
                       <option value="requirements.txt">requirements.txt</option>
                       <option value="pyproject.toml">pyproject.toml</option>
+                      <option value="go.mod">go.mod</option>
+                      <option value="Cargo.toml">Cargo.toml</option>
+                      <option value="pom.xml">pom.xml</option>
                       <option value="composer.lock">composer.lock</option>
                       <option value="Gemfile.lock">Gemfile.lock</option>
                     </select>
@@ -456,24 +664,39 @@ export const ScansView: React.FC<ScansViewProps> = ({
                 </div>
 
                 <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label htmlFor="scan-sast" className="text-xs font-medium text-slate-300">
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <label htmlFor="scan-sast" className="text-xs font-medium text-slate-300 truncate">
                       Authorized Source Code (SAST)
                     </label>
-                    <input
-                      type="text"
-                      value={sastFilename}
-                      onChange={(e) => setSastFilename(e.target.value)}
-                      aria-label="SAST filename"
-                      className="w-28 text-[11px] font-mono bg-[#090D16] border border-slate-700 rounded px-1.5 py-0.5 text-slate-300"
-                    />
+                    <div className="flex items-center gap-2 shrink-0">
+                      <label className="text-[11px] text-blue-400 hover:underline cursor-pointer whitespace-nowrap">
+                        Upload files
+                        <input
+                          type="file"
+                          multiple
+                          onChange={handleMultiSastUpload}
+                          className="sr-only"
+                        />
+                      </label>
+                      <input
+                        type="text"
+                        value={sastFilename}
+                        onChange={(e) => setSastFilename(e.target.value)}
+                        aria-label="SAST filename"
+                        className="w-24 text-[11px] font-mono bg-[#090D16] border border-slate-700 rounded px-1.5 py-0.5 text-slate-300"
+                      />
+                    </div>
                   </div>
                   <textarea
                     id="scan-sast"
                     rows={5}
                     value={sastCodeRaw}
                     onChange={(e) => setSastCodeRaw(e.target.value)}
-                    placeholder="Paste authorized application source file for static security checks..."
+                    placeholder={
+                      sastFiles.length > 0
+                        ? `${sastFiles.length} source file(s) attached: ${sastFiles.map((f) => f.filename).join(', ')}`
+                        : 'Paste authorized application source file or upload multiple files for static security checks...'
+                    }
                     className="w-full px-3 py-2 text-xs font-mono bg-[#090D16] border border-slate-700 rounded text-slate-200"
                   />
                 </div>
@@ -582,19 +805,20 @@ export const ScansView: React.FC<ScansViewProps> = ({
                     </div>
                   </div>
 
-                  {/* Check Taxonomy Summary */}
-                  <div className="mt-4 pt-4 border-t border-slate-800 grid grid-cols-3 sm:grid-cols-7 gap-2 text-center">
+                  {/* Normalized Check Taxonomy Summary */}
+                  <div className="mt-4 pt-4 border-t border-slate-800 grid grid-cols-4 sm:grid-cols-8 gap-2 text-center">
                     {[
-                      ['Total', detail.scan.total_checks, 'text-slate-100'],
-                      ['Passed', detail.scan.passed_checks, 'text-emerald-400'],
-                      ['Failed', detail.scan.failed_checks, 'text-red-400'],
-                      ['Potential', detail.scan.potential_checks, 'text-amber-400'],
-                      ['Info', detail.scan.informational_checks, 'text-slate-400'],
-                      ['Manual', detail.scan.manual_required_checks, 'text-amber-300'],
-                      ['Skipped/NA', detail.scan.not_applicable_checks + detail.scan.not_performed_checks, 'text-slate-500'],
+                      ['TOTAL', detail.scan.total_checks, 'text-slate-100'],
+                      ['PASS', detail.scan.passed_checks, 'text-emerald-400'],
+                      ['FAIL', detail.scan.failed_checks, 'text-red-400'],
+                      ['POTENTIAL', detail.scan.potential_checks, 'text-amber-400'],
+                      ['INFO', detail.scan.informational_checks, 'text-slate-400'],
+                      ['MANUAL', detail.scan.manual_required_checks, 'text-amber-300'],
+                      ['NOT_PERF', detail.scan.not_performed_checks, 'text-slate-500'],
+                      ['N/A', detail.scan.not_applicable_checks, 'text-slate-500'],
                     ].map(([label, val, cls]) => (
                       <div key={String(label)} className="bg-[#090D16] border border-slate-800 rounded p-2">
-                        <div className="text-[11px] text-slate-500">{label}</div>
+                        <div className="text-[10px] font-mono text-slate-500 truncate">{label}</div>
                         <div className={`text-sm font-mono font-semibold tabular-nums ${cls}`}>{val}</div>
                       </div>
                     ))}
@@ -632,6 +856,47 @@ export const ScansView: React.FC<ScansViewProps> = ({
                   </div>
                 </div>
 
+                {/* Discovered Attack Surface Endpoints */}
+                {detail.endpoints.length > 0 && (
+                  <div className="bg-[#0F172A] border border-slate-800 rounded-md overflow-hidden">
+                    <div className="px-4 py-3 border-b border-slate-800 text-xs font-semibold text-slate-200">
+                      Discovered Attack Surface Endpoints ({detail.endpoints.length})
+                    </div>
+                    <div className="overflow-x-auto max-h-60">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead className="sticky top-0 bg-[#0B111E] border-b border-slate-800 text-slate-400">
+                          <tr>
+                            <th className="py-2 px-4 font-medium">Method</th>
+                            <th className="py-2 px-4 font-medium">Path</th>
+                            <th className="py-2 px-4 font-medium">Source</th>
+                            <th className="py-2 px-4 font-medium">Parameters</th>
+                            <th className="py-2 px-4 font-medium text-right">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800/80">
+                          {detail.endpoints.slice(0, 60).map((ep) => {
+                            let params: string[] = [];
+                            try {
+                              params = JSON.parse(ep.parameters_json || '[]') as string[];
+                            } catch {
+                              params = [];
+                            }
+                            return (
+                              <tr key={ep.id} className="hover:bg-slate-800/30">
+                                <td className="py-2 px-4 font-mono text-blue-300">{ep.method}</td>
+                                <td className="py-2 px-4 font-mono text-slate-200">{ep.path}</td>
+                                <td className="py-2 px-4 text-slate-400">{ep.source}</td>
+                                <td className="py-2 px-4 font-mono text-[11px] text-slate-400">{params.join(', ') || '—'}</td>
+                                <td className="py-2 px-4 text-right font-mono text-slate-300">{ep.status_code ?? '—'}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
                 {/* Security Checks Ledger */}
                 <div className="bg-[#0F172A] border border-slate-800 rounded-md overflow-hidden">
                   <div className="px-4 py-3 border-b border-slate-800 text-xs font-semibold text-slate-200">
@@ -648,10 +913,10 @@ export const ScansView: React.FC<ScansViewProps> = ({
                       </thead>
                       <tbody className="divide-y divide-slate-800/80">
                         {detail.checks.map((c) => {
-                          const out = getCheckOutcomeLabel(c.status);
+                          const out = getCheckOutcomeLabel(c.normalized_status || c.status);
                           return (
                             <tr key={c.id} className="hover:bg-slate-800/30">
-                              <td className={`py-2.5 px-4 whitespace-nowrap font-medium ${out.colorClass}`}>
+                              <td className={`py-2.5 px-4 whitespace-nowrap font-mono text-[11px] font-medium ${out.colorClass}`}>
                                 {out.label}
                               </td>
                               <td className="py-2.5 px-4">

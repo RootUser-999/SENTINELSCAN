@@ -20,6 +20,7 @@ function buildPracticeContext(): ScanContext {
     allowPracticeTarget: true,
     rateLimitRps: 20,
     timeoutMs: 5000,
+    maxRequests: 250,
   });
 
   return {
@@ -30,7 +31,10 @@ function buildPracticeContext(): ScanContext {
     hostname: PRACTICE_LAB_HOSTNAME,
     isPracticeTarget: true,
     profile: 'comprehensive',
-    maxDepth: 2,
+    maxDepth: 3,
+    maxUrls: 60,
+    maxRequests: 250,
+    concurrencyLimit: 3,
     requestTimeoutMs: 5000,
     rateLimitRps: 20,
     scopeIncludePaths: ['/'],
@@ -38,14 +42,19 @@ function buildPracticeContext(): ScanContext {
     allowAuthenticated: false,
     authHeaders: {},
     authRoleProfile: null,
+    secondaryAuthHeaders: {},
+    secondaryAuthRoleProfile: null,
+    customHeaders: {},
     secretValuesToRedact: [],
     openapiSpecRaw: PRACTICE_OPENAPI_SAMPLE,
     scaManifestName: null,
     scaManifestRaw: null,
     sastFilename: 'checkout.ts',
     sastCodeRaw: PRACTICE_SAST_SAMPLE,
+    sastFiles: [],
     isCancelled: () => false,
     httpFetch: (url, init) => client.request(url, init),
+    getHttpStats: () => client.getStats(),
     log: () => {},
     sharedState: { discoveredUrls: new Set() },
   };
@@ -60,6 +69,10 @@ test('Dependency manifest parser extracts pinned packages across ecosystems', ()
   const pyPkgs = parseDependencyManifest('requirements.txt', 'django==4.1.0\nrequests==2.28.1\n');
   assert.equal(pyPkgs.length, 2);
   assert.equal(pyPkgs[0].ecosystem, 'PyPI');
+
+  const goPkgs = parseDependencyManifest('go.mod', 'require github.com/gin-gonic/gin v1.9.1\n');
+  assert.equal(goPkgs.length, 1);
+  assert.equal(goPkgs[0].ecosystem, 'Go');
 });
 
 test('Scanner modules detect real intentional weaknesses on isolated Practice Lab target', async () => {
@@ -84,8 +97,8 @@ test('Scanner modules detect real intentional weaknesses on isolated Practice La
   assert.ok(apiRes.findings.some((f) => f.ruleId === 'API_BOLA_INDICATOR'));
 
   const sastRes = await staticCodeSastModule.execute(ctx);
-  assert.ok(sastRes.findings.some((f) => f.cweId === 'CWE-798')); // hardcoded secret
-  assert.ok(sastRes.findings.some((f) => f.cweId === 'CWE-89'));  // SQL concatenation
-  assert.ok(sastRes.findings.some((f) => f.cweId === 'CWE-328')); // MD5 weak hash
-  assert.ok(sastRes.findings.some((f) => f.cweId === 'CWE-79'));  // innerHTML sink
+  assert.ok(sastRes.findings.some((f) => f.cweId === 'CWE-798'));
+  assert.ok(sastRes.findings.some((f) => f.cweId === 'CWE-89'));
+  assert.ok(sastRes.findings.some((f) => f.cweId === 'CWE-328'));
+  assert.ok(sastRes.findings.some((f) => f.cweId === 'CWE-79'));
 });

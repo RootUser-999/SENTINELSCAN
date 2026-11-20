@@ -105,6 +105,7 @@ export interface Vulnerability {
   category: string;
   description: string;
   technical_explanation: string;
+  detection_technique?: string | null;
   affected_url: string;
   http_method: string | null;
   parameter_name: string | null;
@@ -135,6 +136,7 @@ export interface SecurityCheckRow {
   title: string;
   category: string;
   status: 'passed' | 'failed' | 'potential' | 'informational' | 'not_applicable' | 'not_performed' | 'manual_required';
+  normalized_status?: string;
   observed_value: string | null;
   expected_value: string | null;
   explanation: string;

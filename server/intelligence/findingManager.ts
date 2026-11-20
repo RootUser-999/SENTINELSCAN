@@ -40,12 +40,13 @@ export function upsertScanFindings(
       | undefined;
 
     let vulnId: string;
+    const technique = f.detectionTechnique || `${params.scannerModuleId} (${f.confidence} confidence)`;
     if (existing) {
       vulnId = existing.id;
       const nextStatus = existing.verification_status === 'remediated' ? 'reopened' : existing.verification_status;
       db.prepare(
         `UPDATE vulnerabilities
-         SET latest_scan_id = ?, title = ?, description = ?, technical_explanation = ?,
+         SET latest_scan_id = ?, title = ?, description = ?, technical_explanation = ?, detection_technique = ?,
              severity = ?, cvss_version = ?, cvss_score = ?, cvss_vector = ?, cvss_rationale = ?,
              verification_status = ?, updated_at = ?
          WHERE id = ?`
@@ -54,6 +55,7 @@ export function upsertScanFindings(
         f.title,
         f.description,
         f.technicalExplanation,
+        technique,
         f.severity,
         f.cvssVersion,
         f.cvssScore,
@@ -84,11 +86,11 @@ export function upsertScanFindings(
       db.prepare(
         `INSERT INTO vulnerabilities (
           id, organization_id, asset_id, first_scan_id, latest_scan_id, fingerprint, finding_code,
-          title, category, description, technical_explanation, affected_url, http_method, parameter_name,
+          title, category, description, technical_explanation, detection_technique, affected_url, http_method, parameter_name,
           scanner_module, confidence, severity, cvss_version, cvss_score, cvss_vector, cvss_rationale,
           cwe_id, cve_id, owasp_category, owasp_api_category, business_impact, exploitation_prerequisites,
           remediation_instructions, references_json, verification_status, assigned_to, detected_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', NULL, ?, ?)`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', NULL, ?, ?)`
       ).run(
         vulnId,
         params.organizationId,
@@ -101,6 +103,7 @@ export function upsertScanFindings(
         f.category,
         f.description,
         f.technicalExplanation,
+        technique,
         f.affectedUrl,
         f.httpMethod,
         f.parameterName,

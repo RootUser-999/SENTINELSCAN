@@ -20,10 +20,27 @@ export function getDb(): DatabaseSync {
   db.exec('PRAGMA busy_timeout = 5000;');
 
   initializeSchema(db);
+  migrateSchema(db);
   seedComplianceFrameworks(db);
 
   dbInstance = db;
   return db;
+}
+
+function ensureColumn(db: DatabaseSync, table: string, column: string, definition: string): void {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+
+function migrateSchema(db: DatabaseSync): void {
+  ensureColumn(db, 'scan_configurations', 'max_urls', 'INTEGER NOT NULL DEFAULT 60');
+  ensureColumn(db, 'scan_configurations', 'max_requests', 'INTEGER NOT NULL DEFAULT 250');
+  ensureColumn(db, 'scan_configurations', 'secondary_credential_id', 'TEXT');
+  ensureColumn(db, 'scan_configurations', 'custom_headers_json', 'TEXT');
+  ensureColumn(db, 'scan_configurations', 'sast_files_json', 'TEXT');
+  ensureColumn(db, 'vulnerabilities', 'detection_technique', 'TEXT');
 }
 
 function initializeSchema(db: DatabaseSync): void {

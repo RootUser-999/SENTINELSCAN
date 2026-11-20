@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { normalizeCheckOutcome } from '../db/types.ts';
 
 export type CsvExportScope =
   | 'all-findings'
@@ -52,7 +53,7 @@ export function generateCsvReport(
           r.check_key,
           r.title,
           r.category,
-          r.status,
+          normalizeCheckOutcome(String(r.status)),
           r.observed_value,
           r.expected_value,
           r.cwe_id,
@@ -76,7 +77,14 @@ export function generateCsvReport(
       filename: `sentinelscan-${shortId}-security-headers.csv`,
       content: toCsv(
         ['Header', 'Status', 'Observed Value', 'Recommended Configuration', 'Impact & Analysis', 'Remediation'],
-        rows.map((r) => [r.title, r.status, r.observed_value, r.expected_value, r.explanation, r.remediation])
+        rows.map((r) => [
+          r.title,
+          normalizeCheckOutcome(String(r.status)),
+          r.observed_value,
+          r.expected_value,
+          r.explanation,
+          r.remediation,
+        ])
       ),
     };
   }
@@ -124,7 +132,15 @@ export function generateCsvReport(
       filename: `sentinelscan-${shortId}-compliance-mapping.csv`,
       content: toCsv(
         ['Framework', 'Version', 'Control Code', 'Control Title', 'Assessed Status', 'Evidence Required', 'Assessment Notes'],
-        rows.map((r) => [r.framework, r.version, r.control_code, r.title, r.status, r.evidence_required, r.notes])
+        rows.map((r) => [
+          r.framework,
+          r.version,
+          r.control_code,
+          r.title,
+          normalizeCheckOutcome(String(r.status)),
+          r.evidence_required,
+          r.notes,
+        ])
       ),
     };
   }
@@ -132,9 +148,10 @@ export function generateCsvReport(
   // 'all-findings' or 'vulnerability-inventory'
   const rows = db
     .prepare(
-      `SELECT v.finding_code, v.title, v.severity, v.verification_status, v.category, v.affected_url, v.http_method,
-              v.parameter_name, v.cvss_version, v.cvss_score, v.cvss_vector, v.cwe_id, v.cve_id, v.owasp_category,
-              v.owasp_api_category, v.confidence, v.scanner_module, v.detected_at, v.remediation_instructions
+      `SELECT v.finding_code, v.title, v.severity, v.verification_status, v.category, v.detection_technique,
+              v.affected_url, v.http_method, v.parameter_name, v.cvss_version, v.cvss_score, v.cvss_vector,
+              v.cwe_id, v.cve_id, v.owasp_category, v.owasp_api_category, v.confidence, v.scanner_module,
+              v.detected_at, v.remediation_instructions
        FROM vulnerabilities v
        WHERE v.organization_id = ? AND v.latest_scan_id = ?
        ORDER BY CASE v.severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 ELSE 5 END, v.detected_at DESC`
@@ -150,6 +167,7 @@ export function generateCsvReport(
         'Severity',
         'Status',
         'Category',
+        'Detection Technique',
         'Affected URL',
         'Method',
         'Parameter',
@@ -171,6 +189,7 @@ export function generateCsvReport(
         r.severity,
         r.verification_status,
         r.category,
+        r.detection_technique,
         r.affected_url,
         r.http_method,
         r.parameter_name,

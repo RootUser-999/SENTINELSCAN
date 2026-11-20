@@ -1,5 +1,6 @@
 import PDFDocument from 'pdfkit';
 import type { DatabaseSync } from 'node:sqlite';
+import { normalizeCheckOutcome } from '../db/types.ts';
 import { buildStructuredReportData } from './jsonExporter.ts';
 
 const COLORS = {
@@ -114,24 +115,27 @@ export async function generatePdfReportBuffer(
     const es = data.executiveSummary;
     const scoreDisplay = es.postureScore !== null ? `${es.postureScore} / 100` : 'N/A';
 
-    // Summary KPI strip
     const kpis: Array<[string, string, string]> = [
       ['Posture Score', scoreDisplay, COLORS.blue],
       ['Total Checks', String(es.totalChecks), COLORS.navy],
-      ['Passed Checks', String(es.passedChecks), COLORS.passed],
-      ['Failed Checks', String(es.failedChecks), COLORS.critical],
-      ['Manual Required', String(es.manualRequiredChecks), COLORS.medium],
+      ['PASS', String(es.passedChecks), COLORS.passed],
+      ['FAIL', String(es.failedChecks), COLORS.critical],
+      ['MANUAL_REQUIRED', String(es.manualRequiredChecks), COLORS.medium],
     ];
     const boxW = (pageWidth - 24) / 5;
     kpis.forEach(([label, val, col], idx) => {
       const bx = 50 + idx * (boxW + 6);
       doc.rect(bx, y, boxW, 52).fill(COLORS.lightBg).stroke(COLORS.border);
-      doc.fillColor(COLORS.muted).fontSize(8).font('Helvetica-Bold').text(label, bx + 8, y + 10, { width: boxW - 16 });
+      doc.fillColor(COLORS.muted).fontSize(7.5).font('Helvetica-Bold').text(label, bx + 8, y + 10, { width: boxW - 16 });
       doc.fillColor(col).fontSize(14).font('Helvetica-Bold').text(val, bx + 8, y + 26, { width: boxW - 16 });
     });
 
     y += 72;
-    doc.fillColor(COLORS.navy).fontSize(12).font('Helvetica-Bold').text('Vulnerability Severity Distribution', 50, y);
+    doc.fillColor(COLORS.navy).fontSize(12).font('Helvetica-Bold').text(
+      `Active Vulnerability Severity Distribution (${es.activeFindingsTotal} Active / ${es.allScanFindingsTotal} Total Detected)`,
+      50,
+      y
+    );
     y += 18;
 
     const sevBars: Array<[string, number, string]> = [
@@ -153,20 +157,20 @@ export async function generatePdfReportBuffer(
     }
 
     y += 14;
-    doc.fillColor(COLORS.navy).fontSize(12).font('Helvetica-Bold').text('Check Outcome Breakdown (No Untested Checks Marked Passed)', 50, y);
+    doc.fillColor(COLORS.navy).fontSize(12).font('Helvetica-Bold').text('Normalized Check Outcomes (Reconciled Total: ' + es.totalChecks + ')', 50, y);
     y += 18;
     const outcomeRows: Array<[string, number]> = [
-      ['Passed (Verified Compliant)', Number(es.passedChecks)],
-      ['Failed (Confirmed Weakness)', Number(es.failedChecks)],
-      ['Potential (Requires Verification)', Number(es.potentialChecks)],
-      ['Informational Observations', Number(es.informationalChecks)],
-      ['Manual / Authenticated Required', Number(es.manualRequiredChecks)],
-      ['Not Applicable', Number(es.notApplicableChecks)],
-      ['Not Performed / Skipped', Number(es.notPerformedChecks)],
+      ['PASS (Verified Compliant)', Number(es.passedChecks)],
+      ['FAIL (Confirmed Weakness)', Number(es.failedChecks)],
+      ['POTENTIAL (Requires Verification)', Number(es.potentialChecks)],
+      ['INFORMATIONAL (Observations)', Number(es.informationalChecks)],
+      ['MANUAL_REQUIRED (Manual / Authenticated Verification)', Number(es.manualRequiredChecks)],
+      ['NOT_APPLICABLE', Number(es.notApplicableChecks)],
+      ['NOT_PERFORMED (Skipped / Missing Input or CLI)', Number(es.notPerformedChecks)],
     ];
     for (const [label, count] of outcomeRows) {
-      doc.fillColor(COLORS.muted).fontSize(9).font('Helvetica').text(label, 55, y, { width: 260 });
-      doc.fillColor(COLORS.navy).fontSize(9).font('Helvetica-Bold').text(String(count), 320, y);
+      doc.fillColor(COLORS.muted).fontSize(9).font('Helvetica').text(label, 55, y, { width: 300 });
+      doc.fillColor(COLORS.navy).fontSize(9).font('Helvetica-Bold').text(String(count), 360, y);
       y += 16;
     }
 
@@ -214,8 +218,17 @@ export async function generatePdfReportBuffer(
 
         doc.fillColor(COLORS.muted).fontSize(8).font('Helvetica-Bold').text(metaLine, 50, y, { width: pageWidth });
         y += 14;
-        doc.fillColor(COLORS.slate).fontSize(8.5).font('Helvetica').text(`Affected Endpoint: ${f.affected_url}${f.parameter_name ? ` (param: ${f.parameter_name})` : ''}`, 50, y, { width: pageWidth });
+        doc.fillColor(COLORS.slate).fontSize(8.5).font('Helvetica').text(
+          `Affected Endpoint: ${f.http_method ? `${f.http_method} ` : ''}${f.affected_url}${f.parameter_name ? ` (param: ${f.parameter_name})` : ''}`,
+          50,
+          y,
+          { width: pageWidth }
+        );
         y += 14;
+        if (f.detection_technique) {
+          doc.fillColor(COLORS.muted).fontSize(8).font('Helvetica').text(`Detection Technique: ${f.detection_technique}`, 50, y, { width: pageWidth });
+          y = doc.y + 4;
+        }
         doc.fillColor(COLORS.navy).fontSize(8.5).font('Helvetica').text(`Description: ${f.description}`, 50, y, { width: pageWidth });
         y = doc.y + 4;
         doc.fillColor(COLORS.muted).fontSize(8.5).font('Helvetica').text(`Technical Detail: ${f.technical_explanation}`, 50, y, { width: pageWidth });
@@ -236,21 +249,28 @@ export async function generatePdfReportBuffer(
     // === SECTION 3: SECURITY HEADERS & CHECKS ===
     doc.addPage();
     y = 65;
-    doc.fillColor(COLORS.navy).fontSize(16).font('Helvetica-Bold').text('3. HTTP Security Headers & Configuration Checks', 50, y);
+    doc.fillColor(COLORS.navy).fontSize(16).font('Helvetica-Bold').text('3. Security Checks & Configuration Ledger', 50, y);
     y += 24;
 
     for (const chk of data.securityChecks) {
       if (y > 725) { doc.addPage(); y = 65; }
-      const st = String(chk.status);
-      const stColor = st === 'passed' ? COLORS.passed : st === 'failed' ? COLORS.critical : st === 'potential' ? COLORS.medium : COLORS.muted;
-      doc.fillColor(stColor).fontSize(8).font('Helvetica-Bold').text(st.toUpperCase(), 50, y, { width: 85 });
-      doc.fillColor(COLORS.navy).fontSize(8.5).font('Helvetica-Bold').text(String(chk.title), 140, y, { width: pageWidth - 90 });
+      const stNorm = normalizeCheckOutcome(String(chk.status));
+      const stColor =
+        stNorm === 'PASS'
+          ? COLORS.passed
+          : stNorm === 'FAIL'
+            ? COLORS.critical
+            : stNorm === 'POTENTIAL' || stNorm === 'MANUAL_REQUIRED'
+              ? COLORS.medium
+              : COLORS.muted;
+      doc.fillColor(stColor).fontSize(7.5).font('Helvetica-Bold').text(stNorm, 50, y, { width: 95 });
+      doc.fillColor(COLORS.navy).fontSize(8.5).font('Helvetica-Bold').text(String(chk.title), 150, y, { width: pageWidth - 100 });
       y = doc.y + 2;
       doc.fillColor(COLORS.muted).fontSize(8).font('Helvetica').text(
         `Observed: ${String(chk.observed_value || 'N/A').slice(0, 140)}`,
-        140,
+        150,
         y,
-        { width: pageWidth - 90 }
+        { width: pageWidth - 100 }
       );
       y = doc.y + 8;
     }
@@ -270,16 +290,17 @@ export async function generatePdfReportBuffer(
 
     for (const m of data.complianceMapping) {
       if (y > 730) { doc.addPage(); y = 65; }
+      const normM = normalizeCheckOutcome(String(m.status));
       doc.fillColor(COLORS.navy).fontSize(8.5).font('Helvetica-Bold').text(
         `${m.framework_name} ${m.control_code} — ${m.control_title}`,
         50,
         y,
         { width: 320 }
       );
-      doc.fillColor(m.status === 'passed' ? COLORS.passed : m.status === 'failed' ? COLORS.critical : COLORS.muted)
-        .fontSize(8.5)
+      doc.fillColor(normM === 'PASS' ? COLORS.passed : normM === 'FAIL' ? COLORS.critical : COLORS.muted)
+        .fontSize(8)
         .font('Helvetica-Bold')
-        .text(String(m.status).toUpperCase(), 380, y, { width: 100 });
+        .text(normM, 380, y, { width: 110 });
       y = doc.y + 2;
       doc.fillColor(COLORS.muted).fontSize(7.5).font('Helvetica').text(String(m.notes), 50, y, { width: pageWidth });
       y = doc.y + 8;
@@ -290,15 +311,14 @@ export async function generatePdfReportBuffer(
     doc.fillColor(COLORS.navy).fontSize(13).font('Helvetica-Bold').text('Prioritized Remediation Roadmap', 50, y);
     y += 18;
     doc.fillColor(COLORS.slate).fontSize(9).font('Helvetica').text(
-      '1. Immediate (0–7 days): Remediate Critical/High exposures (exposed .env/VCS files, hardcoded secrets, unauthenticated sensitive API endpoints).\n' +
+      '1. Immediate (0–7 days): Remediate Critical/High exposures (SQL/NoSQL injection, XSS, path traversal, exposed .env/VCS files, hardcoded secrets, unauthenticated sensitive API endpoints).\n' +
       '2. Short-Term (7–30 days): Enforce strict CSP, HSTS, X-Frame-Options, CORS allowlisting, HttpOnly/Secure session cookies, and upgrade vulnerable dependencies.\n' +
-      '3. Medium-Term (30–90 days): Complete all manual_required assessments (Argon2/bcrypt verification, encryption at rest, MFA/lockout policies, and role-based penetration testing).',
+      '3. Medium-Term (30–90 days): Complete all MANUAL_REQUIRED assessments (Argon2/bcrypt verification, encryption at rest, MFA/lockout policies, and role-based penetration testing).',
       50,
       y,
       { width: pageWidth, lineGap: 4 }
     );
 
-    // Apply headers, footers, and Page X of Y on all pages
     const range = doc.bufferedPageRange();
     for (let i = 0; i < range.count; i++) {
       doc.switchToPage(i);

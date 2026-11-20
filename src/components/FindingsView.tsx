@@ -327,6 +327,11 @@ export const FindingsView: React.FC<FindingsViewProps> = ({
                 <h3 className="font-semibold text-slate-200 mb-1">Description & Technical Explanation</h3>
                 <p className="text-slate-300 leading-relaxed">{detail.finding.description}</p>
                 <p className="mt-1.5 text-slate-400 leading-relaxed">{detail.finding.technical_explanation}</p>
+                {detail.finding.detection_technique && (
+                  <p className="mt-1.5 text-[11px] text-blue-300 font-mono">
+                    Detection Technique: {detail.finding.detection_technique}
+                  </p>
+                )}
                 <p className="mt-1.5 text-[11px] text-slate-500">
                   CVSS Rationale: {detail.finding.cvss_rationale}
                   {detail.finding.cvss_vector ? ` (${detail.finding.cvss_vector})` : ''}

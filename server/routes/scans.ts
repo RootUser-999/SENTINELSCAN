@@ -2,6 +2,8 @@ import crypto from 'node:crypto';
 import { Router } from 'express';
 import { z } from 'zod';
 import { getDb } from '../db/database.ts';
+import { normalizeCheckOutcome } from '../db/types.ts';
+import { computeReconciledScanStats } from '../intelligence/reconcile.ts';
 import { enqueueScan, requestScanCancellation, selectModulesForProfile } from '../scanner/engine.ts';
 import { writeAuditLog } from '../security/audit.ts';
 import { type AuthenticatedRequest, rateLimit, requireAuth, requireRole } from '../security/auth.ts';
@@ -35,15 +37,30 @@ const launchScanSchema = z.object({
   profile: z.enum(['quick', 'standard', 'comprehensive', 'custom']),
   selectedModules: z.array(z.string()).optional(),
   maxDepth: z.number().int().min(1).max(5).optional().default(2),
-  requestTimeoutMs: z.number().int().min(2000).max(15000).optional().default(8000),
+  maxUrls: z.number().int().min(5).max(250).optional().default(60),
+  maxRequests: z.number().int().min(20).max(1500).optional().default(250),
+  concurrencyLimit: z.number().int().min(1).max(6).optional().default(3),
+  requestTimeoutMs: z.number().int().min(2000).max(25000).optional().default(10000),
   rateLimitRps: z.number().int().min(1).max(20).optional().default(5),
   allowAuthenticated: z.boolean().optional().default(false),
   credentialId: z.string().nullable().optional().default(null),
+  secondaryCredentialId: z.string().nullable().optional().default(null),
+  customHeaders: z.record(z.string(), z.string()).optional().default({}),
   openapiSpecRaw: z.string().max(300_000).nullable().optional().default(null),
   scaManifestName: z.string().max(120).nullable().optional().default(null),
   scaManifestRaw: z.string().max(500_000).nullable().optional().default(null),
   sastFilename: z.string().max(120).nullable().optional().default(null),
   sastCodeRaw: z.string().max(500_000).nullable().optional().default(null),
+  sastFiles: z
+    .array(
+      z.object({
+        filename: z.string().min(1).max(160),
+        content: z.string().max(300_000),
+      })
+    )
+    .max(25)
+    .optional()
+    .default([]),
 });
 
 router.post('/', requireAuth, requireRole(['admin', 'analyst']), rateLimit(15, 60_000), (req: AuthenticatedRequest, res) => {
@@ -82,10 +99,11 @@ router.post('/', requireAuth, requireRole(['admin', 'analyst']), rateLimit(15, 6
 
   db.prepare(
     `INSERT INTO scan_configurations (
-      id, organization_id, name, profile, selected_modules_json, max_depth, request_timeout_ms,
-      concurrency_limit, rate_limit_rps, allow_authenticated, credential_id, openapi_spec_raw,
-      sca_manifest_name, sca_manifest_raw, sast_filename, sast_code_raw, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, 2, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      id, organization_id, name, profile, selected_modules_json, max_depth, max_urls, max_requests,
+      request_timeout_ms, concurrency_limit, rate_limit_rps, allow_authenticated, credential_id,
+      secondary_credential_id, custom_headers_json, openapi_spec_raw,
+      sca_manifest_name, sca_manifest_raw, sast_filename, sast_code_raw, sast_files_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     configId,
     req.authUser!.organizationId,
@@ -93,15 +111,21 @@ router.post('/', requireAuth, requireRole(['admin', 'analyst']), rateLimit(15, 6
     parsed.data.profile,
     JSON.stringify(modules.map((m) => m.id)),
     parsed.data.maxDepth,
+    parsed.data.maxUrls,
+    parsed.data.maxRequests,
     parsed.data.requestTimeoutMs,
+    parsed.data.concurrencyLimit,
     Math.min(Number(asset.max_requests_per_sec || 5), parsed.data.rateLimitRps),
     parsed.data.allowAuthenticated ? 1 : 0,
     parsed.data.credentialId,
+    parsed.data.secondaryCredentialId,
+    JSON.stringify(parsed.data.customHeaders || {}),
     parsed.data.openapiSpecRaw,
     parsed.data.scaManifestName,
     parsed.data.scaManifestRaw,
     parsed.data.sastFilename,
     parsed.data.sastCodeRaw,
+    JSON.stringify(parsed.data.sastFiles || []),
     now
   );
 
@@ -117,7 +141,14 @@ router.post('/', requireAuth, requireRole(['admin', 'analyst']), rateLimit(15, 6
     action: 'scan.launched',
     entityType: 'scan',
     entityId: scanId,
-    details: { assetId: asset.id, profile: parsed.data.profile, moduleCount: modules.length },
+    details: {
+      assetId: asset.id,
+      profile: parsed.data.profile,
+      moduleCount: modules.length,
+      maxDepth: parsed.data.maxDepth,
+      maxUrls: parsed.data.maxUrls,
+      maxRequests: parsed.data.maxRequests,
+    },
     ipAddress: req.ip || null,
   });
 
@@ -163,8 +194,8 @@ router.get('/compare', requireAuth, (req: AuthenticatedRequest, res) => {
       checkDiffs.push({
         checkKey: tc.check_key,
         title: tc.title,
-        baselineStatus: bc ? bc.status : 'absent',
-        targetStatus: tc.status,
+        baselineStatus: bc ? normalizeCheckOutcome(bc.status) : 'ABSENT',
+        targetStatus: normalizeCheckOutcome(tc.status),
       });
     }
   }
@@ -206,9 +237,13 @@ router.get('/:id', requireAuth, (req: AuthenticatedRequest, res) => {
   const logs = db
     .prepare('SELECT * FROM scan_progress WHERE scan_id = ? ORDER BY timestamp ASC')
     .all(req.params.id);
-  const checks = db
+  const rawChecks = db
     .prepare('SELECT * FROM security_checks WHERE scan_id = ? ORDER BY category ASC, title ASC')
-    .all(req.params.id);
+    .all(req.params.id) as Array<Record<string, unknown>>;
+  const checks = rawChecks.map((c) => ({
+    ...c,
+    normalized_status: normalizeCheckOutcome(String(c.status)),
+  }));
   const endpoints = db
     .prepare('SELECT * FROM endpoints WHERE scan_id = ? ORDER BY path ASC, method ASC')
     .all(req.params.id);
@@ -219,7 +254,9 @@ router.get('/:id', requireAuth, (req: AuthenticatedRequest, res) => {
     )
     .all(req.authUser!.organizationId, req.params.id);
 
-  res.json({ scan, executions, logs, checks, endpoints, findings });
+  const reconciledSummary = computeReconciledScanStats(db, String(req.params.id));
+
+  res.json({ scan, executions, logs, checks, endpoints, findings, reconciledSummary });
 });
 
 router.post('/:id/cancel', requireAuth, requireRole(['admin', 'analyst']), (req: AuthenticatedRequest, res) => {

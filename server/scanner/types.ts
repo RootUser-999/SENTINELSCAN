@@ -49,6 +49,7 @@ export interface FindingCandidate {
   category: string;
   description: string;
   technicalExplanation: string;
+  detectionTechnique?: string | null;
   affectedUrl: string;
   httpMethod: string | null;
   parameterName: string | null;
@@ -81,6 +82,62 @@ export interface DiscoveredEndpointCandidate {
   notes: string | null;
 }
 
+export interface CrawledPage {
+  url: string;
+  finalUrl: string;
+  path: string;
+  depth: number;
+  status: number;
+  contentType: string | null;
+  headers: Record<string, string>;
+  setCookies: string[];
+  bodyText: string;
+  queryParams: string[];
+}
+
+export interface DiscoveredForm {
+  pageUrl: string;
+  actionUrl: string;
+  method: string;
+  enctype: string;
+  fields: Array<{ name: string; type: string }>;
+  hasCsrfField: boolean;
+  hasPasswordField: boolean;
+  hasFileInput: boolean;
+}
+
+export interface DiscoveredJsResource {
+  url: string;
+  extractedApiRoutes: string[];
+  domXssMatches: string[];
+  secretMatches: string[];
+}
+
+export interface CrawlResult {
+  pages: CrawledPage[];
+  forms: DiscoveredForm[];
+  parameterizedUrls: Array<{ url: string; path: string; method: string; params: string[] }>;
+  jsResources: DiscoveredJsResource[];
+  discoveredApiRoutes: string[];
+  loginPages: string[];
+  uploadEndpoints: Array<{ pageUrl: string; actionUrl: string; fieldNames: string[] }>;
+  endpoints: DiscoveredEndpointCandidate[];
+  stats: {
+    pagesCrawled: number;
+    maxDepthReached: number;
+    formsFound: number;
+    paramsFound: number;
+    jsFilesFetched: number;
+    apiRoutesFromJs: number;
+    stoppedReason: 'completed' | 'url_limit' | 'request_budget' | 'cancelled';
+  };
+}
+
+export interface SastSourceFile {
+  filename: string;
+  content: string;
+}
+
 export interface ModuleExecutionResult {
   checks: SecurityCheckCandidate[];
   findings: FindingCandidate[];
@@ -97,6 +154,9 @@ export interface ScanContext {
   isPracticeTarget: boolean;
   profile: ScanProfile;
   maxDepth: number;
+  maxUrls: number;
+  maxRequests: number;
+  concurrencyLimit: number;
   requestTimeoutMs: number;
   rateLimitRps: number;
   scopeIncludePaths: string[];
@@ -104,18 +164,28 @@ export interface ScanContext {
   allowAuthenticated: boolean;
   authHeaders: Record<string, string>;
   authRoleProfile: string | null;
+  secondaryAuthHeaders: Record<string, string>;
+  secondaryAuthRoleProfile: string | null;
+  customHeaders: Record<string, string>;
   secretValuesToRedact: string[];
   openapiSpecRaw: string | null;
   scaManifestName: string | null;
   scaManifestRaw: string | null;
   sastFilename: string | null;
   sastCodeRaw: string | null;
+  sastFiles: SastSourceFile[];
   isCancelled: () => boolean;
-  httpFetch: (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string; followRedirects?: boolean }) => Promise<HttpResponseSnapshot>;
+  httpFetch: (
+    url: string,
+    init?: { method?: string; headers?: Record<string, string>; body?: string; followRedirects?: boolean }
+  ) => Promise<HttpResponseSnapshot>;
+  getHttpStats?: () => { requestsSent: number; retries: number; errors: number; budgetRemaining: number };
   log: (level: 'info' | 'warn' | 'error', message: string) => void;
   sharedState: {
     homepageResponse?: HttpResponseSnapshot;
     discoveredUrls: Set<string>;
+    crawlResult?: CrawlResult;
+    discoveredTokens?: string[];
   };
 }
 

@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { Router } from 'express';
 import { z } from 'zod';
 import { getDb } from '../db/database.ts';
+import { reconcileScanCountersInDb } from '../intelligence/reconcile.ts';
 import { writeAuditLog } from '../security/audit.ts';
 import { type AuthenticatedRequest, requireAuth, requireRole } from '../security/auth.ts';
 
@@ -138,6 +139,10 @@ router.patch('/:id/status', requireAuth, requireRole(['admin', 'analyst']), (req
     parsed.data.rationale.trim(),
     now
   );
+
+  if (finding.latest_scan_id) {
+    reconcileScanCountersInDb(db, finding.latest_scan_id);
+  }
 
   writeAuditLog(db, {
     organizationId: req.authUser!.organizationId,
