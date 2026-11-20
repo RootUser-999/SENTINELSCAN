@@ -1,0 +1,15 @@
+services:
+  sentinelscan:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - SENTINEL_AUTH_SECRET=${SENTINEL_AUTH_SECRET}
+      - SENTINEL_VAULT_KEY=${SENTINEL_VAULT_KEY}
+    volumes:
+      - sentinelscan_data:/app/data
+    restart: unless-stopped
+
+volumes:
+  sentinelscan_data:
